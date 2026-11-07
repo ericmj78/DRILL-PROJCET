@@ -30,6 +30,7 @@ python main.py
 | `stages.py` | 스테이지 제목·힌트, 시작점, 출구, 발판과 문, 사다리, 적의 배치와 수치 |
 | `world.py` | 분신 녹화·재현, 충돌, 버튼 상태, 전투와 적의 추적 |
 | `view.py` / `assets/` | 화면 배치, 표시 문구와 이미지 |
+| `animation.py` / `assets/walk_frames.json` | 걷기 속도에 따른 자세 전환과 스프라이트 영역 |
 | `main.py` | 조작키와 게임 시작·재시작·다음 스테이지 처리 |
 
 `Point(x, floor)`의 `floor=0`은 1층이다. `Stair(x, lower)`는 `lower` 층과 바로 윗층을 연결한다. `Gate(label, plate, door)`로 발판과 문을 연결한다. 파일을 수정했다면 `python main.py`로 다시 실행해 배치를 확인한다. 플레이 중에는 `R`로 현재 스테이지를 초기 배치에서 다시 시작할 수 있다.

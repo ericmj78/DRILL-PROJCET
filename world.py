@@ -13,6 +13,7 @@ class Actor:
     floor: int
     facing: int = 1
     moving: bool = False
+    walk_distance: float = 0
 
     @classmethod
     def at(cls, point: Point, facing: int = 1):
@@ -172,7 +173,9 @@ class World:
             elif start >= wall + margin and target < wall + margin:
                 target = wall + margin
         actor.x = target
-        actor.moving = abs(target - start) > 0.001
+        distance = abs(target - start)
+        actor.moving = distance > 0.001
+        actor.walk_distance += distance
 
     def _move(self, actor: Actor, motion: Motion):
         if motion.horizontal:

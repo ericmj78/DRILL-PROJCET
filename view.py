@@ -1,3 +1,4 @@
+import json
 from math import sin
 from os import environ
 from pathlib import Path
@@ -5,6 +6,7 @@ from pathlib import Path
 from pico2d import draw_line, draw_rectangle, load_font, load_image
 from pico2d import pico2d as canvas
 
+from animation import WalkCycle, draw_region
 from stages import ENEMY_KINDS, FLOOR_Y, GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MAX_RECORD_SECONDS, RIGHT, STAGES, STEP
 
 
@@ -19,6 +21,8 @@ GOLD = (245, 181, 100)
 RED = (249, 107, 109)
 PURPLE = (203, 145, 238)
 ASSETS = Path(__file__).resolve().parent / 'assets'
+CHAMBER_TILE = (721, 247, 413, 157)
+FLOOR_TILE = (738, 416, 393, 30)
 
 
 def box(left, bottom, right, top, color, filled=True):
@@ -44,24 +48,27 @@ class View:
         self.heading = load_font(str(bold if bold.exists() else fallback), 25)
         self.display = load_font(str(bold if bold.exists() else fallback), 47)
         self.background = load_asset('dungeon.png')
+        self.title_art = load_asset('title_art.png')
+        self.stone_art = load_asset('dungeon_stone.png')
         self.player = load_asset('player.png')
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
+        atlas = load_asset('walk_atlas.png')
+        frames = json.loads((ASSETS / 'walk_frames.json').read_text(encoding='utf-8'))
+        self.player_walk = WalkCycle(atlas, frames['player'])
+        self.echo_walk = WalkCycle(atlas, frames['echo'])
 
     def draw(self, world, screen):
+        self.background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
+        if screen == 'intro':
+            self._draw_title()
+            return
         offset = (len(FLOOR_Y) - world.stage.floors) * 82
         self.floor_y = tuple(y + offset for y in FLOOR_Y)
-        self.background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
         self._draw_map(world)
         self._draw_characters(world)
         self._draw_hud(world)
-        if screen == 'intro':
-            self._card(
-                'ECHO ESCAPE', '멈춘 시간의 잔향',
-                '분신에게 길과 시간을 맡기고, 본체로 지하 감옥을 탈출하세요.',
-                'ENTER   탐험 시작',
-            )
-        elif world.result == 'defeated':
+        if world.result == 'defeated':
             self._card('다시 도전', world.stage.title, '분신의 경로나 본체의 출발 시점을 바꿔 보세요.', 'R   스테이지 재시작')
         elif world.result == 'cleared':
             if world.index == len(STAGES) - 1:
@@ -72,17 +79,14 @@ class View:
     def _draw_map(self, world):
         stage = world.stage
         for floor, y in enumerate(self.floor_y[:stage.floors]):
-            box(30, y - 12, 1090, y + 130, (11, 25, 45, 148))
+            for tile, (left, right) in enumerate(((30, 384), (384, 737), (737, 1091))):
+                draw_region(self.stone_art, CHAMBER_TILE, left, y, right - left, 130, flip=tile == 1)
+                draw_region(self.stone_art, FLOOR_TILE, left, y - 20, right - left, 20, flip=tile == 1)
+            box(30, y, 1090, y + 130, (4, 14, 29, 78))
             line(30, y + 130, 1090, y + 130, (40, 60, 80))
-            for x in range(104, 1040, 184):
-                box(x, y + 3, x + 8, y + 119, (23, 43, 63, 160))
-                line(x + 8, y + 18, x + 8, y + 106, (40, 63, 83))
-            box(30, y - 20, 1090, y - 1, (22, 37, 55))
-            for x in range(32, 1090, 49):
-                line(x, y - 19, x, y - 7, (11, 21, 35))
-                line(x + 2, y - 12, min(x + 44, 1090), y - 12, (36, 55, 73))
             line(30, y - 1, 1090, y - 1, (75, 105, 129))
-            self.small.draw(33, y + 117, f'{floor + 1}F', MUTED)
+            box(31, y + 108, 57, y + 127, INK)
+            self.small.draw(34, y + 117, f'{floor + 1}F', MUTED)
 
         for stair in stage.stairs:
             y = self.floor_y[stair.lower]
@@ -123,7 +127,7 @@ class View:
     def _draw_characters(self, world):
         recording = world.recording
         if world.echo is not None:
-            self._sprite(self.echo, world.echo.actor, 91, world.time, opacity=145 if recording else 228)
+            self._avatar(self.echo, self.echo_walk, world.echo.actor, opacity=145 if recording else 228)
         for enemy in world.enemies:
             kind = ENEMY_KINDS[enemy.spawn.kind]
             y = self.floor_y[enemy.actor.floor]
@@ -142,15 +146,14 @@ class View:
         player_alpha = 170 if recording else 255
         if world.invulnerable > 0 and int(world.time * 18) % 2:
             player_alpha = 130
-        self._sprite(self.player, world.player, 91, world.time, opacity=player_alpha)
+        self._avatar(self.player, self.player_walk, world.player, opacity=player_alpha)
         if world.attack_flash > 0:
             x = world.player.x + world.player.facing * 38
             y = self.floor_y[world.player.floor] + 46
             for offset in range(0, 7, 2):
                 line(x - 26, y + offset - 13, x + 27, y + offset + 11, GOLD)
         if recording is not None:
-            age = len(recording.inputs) * STEP
-            self._sprite(self.echo, recording.preview, 91, age)
+            self._avatar(self.echo, self.echo_walk, recording.preview)
             actor = recording.preview
             marker = 'REC'
         else:
@@ -160,6 +163,12 @@ class View:
         color = CYAN if recording else WHITE
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
+
+    def _avatar(self, idle, walk, actor, opacity=255):
+        if actor.moving:
+            walk.draw(actor, self.floor_y[actor.floor], opacity)
+        else:
+            self._sprite(idle, actor, 91, 0, opacity=opacity)
 
     def _sprite(self, image, actor, size, time, feet=0.49, faces=1, opacity=255, tint=(255, 255, 255)):
         bob = abs(sin(time * 21)) * 4 if actor.moving else 0
@@ -202,6 +211,17 @@ class View:
         self.small.draw(33, 45, '← →  이동     ↑ ↓  사다리     C  녹화/재현     A/S  공격     Backspace  녹화 취소     R  재시작     Esc  종료', MUTED)
         if world.message_time > 0:
             self.small.draw(33, 18, world.message, GOLD)
+
+    def _draw_title(self):
+        height = WIDTH * self.title_art.h / self.title_art.w
+        self.title_art.draw(WIDTH / 2, HEIGHT / 2, WIDTH, height)
+        line(62, 473, 147, 473, CYAN)
+        self.small.draw(62, 446, '멈춘 시간의 잔향', CYAN)
+        self.display.draw(58, 390, 'ECHO ESCAPE', WHITE)
+        self.body.draw(62, 327, '분신에게 길과 시간을 맡기고', MUTED)
+        self.body.draw(62, 298, '본체로 지하 감옥을 탈출하세요.', MUTED)
+        box(62, 216, 295, 263, (23, 60, 71))
+        self.body.draw(78, 240, 'ENTER   탐험 시작', CYAN)
 
     def _card(self, title, subtitle, description, action):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
