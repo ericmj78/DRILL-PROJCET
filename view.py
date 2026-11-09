@@ -6,7 +6,8 @@ from pathlib import Path
 from pico2d import draw_line, draw_rectangle, load_font, load_image
 from pico2d import pico2d as canvas
 
-from animation import WalkCycle, draw_region
+from animation import AttackCycle, WalkCycle, draw_region
+from monster_walk import MONSTER_GAITS, MonsterWalk
 from stages import ENEMY_KINDS, FLOOR_Y, GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MAX_RECORD_SECONDS, RIGHT, STAGES, STEP
 
 
@@ -53,10 +54,35 @@ class View:
         self.player = load_asset('player.png')
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
-        atlas = load_asset('walk_atlas.png')
-        frames = json.loads((ASSETS / 'walk_frames.json').read_text(encoding='utf-8'))
-        self.player_walk = WalkCycle(atlas, frames['player'])
-        self.echo_walk = WalkCycle(atlas, frames['echo'])
+        walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
+        actors = walk_data['actors']
+        self.player_walk = WalkCycle(
+            load_asset(actors['player']['sheet']), actors['player']['frames'],
+            actors['player']['draw_height'], actors['player']['stride_per_frame'],
+        )
+        self.player_attack = AttackCycle(
+            load_asset('player_attack_sheet.png'),
+            [
+                [25, 33, 495, 658],
+                [543, 33, 543, 658],
+                [1086, 33, 543, 658],
+                [1654, 33, 518, 658],
+            ],
+            draw_height=103,
+        )
+        self.echo_walk = WalkCycle(
+            load_asset(actors['echo']['sheet']), actors['echo']['frames'],
+            actors['echo']['draw_height'], actors['echo']['stride_per_frame'],
+        )
+        self.enemy_walk = {
+            name: MonsterWalk(load_asset(gait.sheet), gait)
+            for name, gait in MONSTER_GAITS.items()
+        }
+        watcher = actors['watcher']
+        self.enemy_walk['watcher'] = WalkCycle(
+            load_asset(watcher['sheet']), watcher['frames'],
+            watcher['draw_height'], watcher['stride_per_frame'],
+        )
 
     def draw(self, world, screen):
         self.background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
@@ -134,7 +160,22 @@ class View:
             x = enemy.actor.x
             feet = 0.30 if enemy.spawn.kind in ('beast', 'crawler') else 0.47
             tint = (255, 166, 156) if enemy.flash > 0 else (255, 255, 255)
-            self._sprite(self.enemies[enemy.spawn.kind], enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
+            if enemy.windup > 0 or enemy.recovery > 0:
+                if enemy.windup > 0:
+                    windup = min(1, max(0, (0.31 - enemy.windup) / 0.31))
+                    recovery = None
+                else:
+                    windup = None
+                    recovery = min(1, max(0, 1 - enemy.recovery / 0.65))
+                self._draw_enemy_attack(
+                    enemy, kind, y, feet, tint, windup=windup, recovery=recovery,
+                )
+            elif enemy.actor.moving:
+                self.enemy_walk[enemy.spawn.kind].draw(
+                    enemy.actor, y, faces=-1, tint=tint,
+                )
+            else:
+                self._sprite(self.enemies[enemy.spawn.kind], enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
             bar_y = y + (73 if feet == 0.30 else 103)
             if enemy.health is not None:
                 box(x - 14, bar_y, x + 14, bar_y + 3, (52, 34, 67))
@@ -146,12 +187,22 @@ class View:
         player_alpha = 170 if recording else 255
         if world.invulnerable > 0 and int(world.time * 18) % 2:
             player_alpha = 130
-        self._avatar(self.player, self.player_walk, world.player, opacity=player_alpha)
         if world.attack_flash > 0:
-            x = world.player.x + world.player.facing * 38
-            y = self.floor_y[world.player.floor] + 46
-            for offset in range(0, 7, 2):
-                line(x - 26, y + offset - 13, x + 27, y + offset + 11, GOLD)
+            progress = 1 - world.attack_flash / 0.14
+            self.player_attack.draw(
+                world.player, self.floor_y[world.player.floor], progress, opacity=player_alpha,
+            )
+        else:
+            self._avatar(self.player, self.player_walk, world.player, opacity=player_alpha)
+        if world.attack_flash > 0:
+            attack_progress = 1 - world.attack_flash / 0.14
+            if 0.50 <= attack_progress <= 0.78:
+                direction = world.player.facing
+                x = world.player.x + direction * 37
+                y = self.floor_y[world.player.floor] + 66
+                line(x - direction * 5, y + 3, x, y + 10, GOLD)
+                line(x + direction * 4, y + 3, x + direction * 11, y + 3, GOLD)
+                line(x - direction * 3, y - 3, x + direction * 2, y - 8, GOLD)
         if recording is not None:
             self._avatar(self.echo, self.echo_walk, recording.preview)
             actor = recording.preview
@@ -163,6 +214,33 @@ class View:
         color = CYAN if recording else WHITE
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
+
+    def _draw_enemy_attack(self, enemy, kind, floor_y, feet, tint, windup=None, recovery=None):
+        walk = self.enemy_walk[enemy.spawn.kind]
+        if isinstance(walk, MonsterWalk):
+            walk.draw(
+                enemy.actor, floor_y, faces=-1, tint=tint,
+                windup=windup, recovery=recovery,
+            )
+            return
+
+        if windup is not None:
+            prep = windup * windup * (3 - 2 * windup)
+            lunge = 0
+        else:
+            prep = 0
+            release = min(1, recovery / 0.18)
+            lunge = 1 - release * release * (3 - 2 * release)
+
+        actor = enemy.actor
+        size = kind.size * (1 - 0.035 * prep + 0.055 * lunge)
+        x = actor.x + actor.facing * (-4 * prep + 14 * lunge)
+        y = floor_y + kind.size * feet + 2 * prep - 2 * lunge
+        angle = actor.facing * (0.12 * prep - 0.22 * lunge)
+        image = self.enemies[enemy.spawn.kind]
+        canvas.SDL_SetTextureColorMod(image.texture, *tint)
+        image.composite_draw(angle, 'h' if actor.facing != -1 else '', x, y, size, size)
+        canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
 
     def _avatar(self, idle, walk, actor, opacity=255):
         if actor.moving:
