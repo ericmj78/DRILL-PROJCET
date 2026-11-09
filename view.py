@@ -102,6 +102,21 @@ class View:
             for offset in range(12, 120, 15):
                 line(wall.x - GATE_HALF_WIDTH, y + offset, wall.x + GATE_HALF_WIDTH, y + offset, LINE)
 
+        for gate, state in zip(stage.gates, world.doors):
+            px, py = gate.plate.x, self.floor_y[gate.plate.floor]
+            gx, gy = gate.door.x, self.floor_y[gate.door.floor]
+            color = CYAN if state.open else GOLD
+            box(px - 28, py, px + 28, py + 5, color)
+            box(px - 22, py + 6, px + 22, py + 8, (32, 97, 100) if state.pressed else (110, 77, 46))
+            self.small.draw(px - 23, py - 11, f'{gate.label} 발판', color)
+            box(gx - 24, gy, gx + 24, gy + 91, color, filled=False)
+            if not state.open:
+                box(gx - 12, gy, gx + 12, gy + 90, (74, 47, 38))
+                for bar in range(-12, 13, 6):
+                    line(gx + bar, gy, gx + bar, gy + 89, (169, 111, 64))
+            box(gx - 19, gy + 92, gx + 19, gy + 113, PANEL)
+            self.small.draw(gx - 13, gy + 102, f'{gate.label} 문', color)
+
     def _draw_characters(self, world):
         recording = world.recording
         if world.echo is not None:

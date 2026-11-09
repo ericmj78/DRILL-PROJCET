@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 from stages import (
     ACTOR_RADIUS, ATTACK_COOLDOWN, GATE_HALF_WIDTH, LEFT, MAX_RECORD_SECONDS,
-    MOVE_SPEED, RIGHT, STAGE, STEP, Point,
+    MOVE_SPEED, RIGHT, STAGE, STEP, Point, DOOR_GRACE, PLATE_RANGE,
 )
 
 
@@ -39,6 +39,13 @@ class Echo:
     cursor: int = 0
 
 
+@dataclass
+class DoorState:
+    pressed: bool = False
+    open: bool = False
+    grace: float = 0
+
+
 class World:
     def __init__(self):
         self.stage = STAGE
@@ -50,6 +57,8 @@ class World:
         self.time = 0.0
         self.message = ''
         self.message_time = 0.0
+        self.doors = [DoorState() for _ in self.stage.gates]
+        self._update_doors(0)
 
     def notify(self, message: str):
         self.message = message
@@ -57,9 +66,6 @@ class World:
 
     def toggle_recording(self):
         if self.recording is None:
-            if self.echo is not None:
-                self.notify('분신의 재현이 끝난 뒤 다시 녹화하세요.')
-                return
             start = Point(self.player.x, self.player.floor)
             facing = self.player.facing
             self.recording = Recording(start, facing, Actor.at(start, facing))
@@ -79,6 +85,7 @@ class World:
             self.notify('분신이 재현할 녹화가 비어 있어요.')
             return
         self.echo = Echo(Actor.at(record.start, record.facing), tuple(record.inputs))
+        self._update_doors(0)
         self.notify('녹화 상한에 도달해 재현을 시작합니다.' if time_limit else '본체 조작 재개 · 분신이 재현합니다.')
 
     def step(self, motion: Motion = Motion(), attack: bool = False):
@@ -105,10 +112,21 @@ class World:
                 self.echo = None
                 self.notify('분신의 재현이 끝났습니다.')
 
+        self._update_doors(STEP)
+
+    def hit_echo(self):
+        if self.recording is None and self.echo is not None:
+            self.echo = None
+            self._update_doors(0)
+            self.notify('분신이 공격을 받아 사라졌습니다.')
+
     def _barriers(self, floor: int):
         for wall in self.stage.walls:
             if wall.floor == floor:
                 yield wall.x
+        for gate, state in zip(self.stage.gates, self.doors):
+            if gate.door.floor == floor and not state.open:
+                yield gate.door.x
 
     def _move_x(self, actor: Actor, amount: float):
         start = actor.x
@@ -128,3 +146,24 @@ class World:
         if motion.horizontal:
             actor.facing = motion.horizontal
         self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
+
+    @staticmethod
+    def _near(actor: Actor, point: Point, distance: float) -> bool:
+        return actor.floor == point.floor and abs(actor.x - point.x) <= distance
+
+    def _update_doors(self, dt: float):
+        actors = [self.player]
+        if self.echo is not None:
+            actors.append(self.echo.actor)
+        for gate, state in zip(self.stage.gates, self.doors):
+            state.pressed = any(self._near(actor, gate.plate, PLATE_RANGE) for actor in actors)
+            if state.pressed:
+                state.grace = DOOR_GRACE
+            else:
+                state.grace = max(0, state.grace - dt)
+            # 닫힐 때 문 안의 캐릭터를 끼우지 않는다.
+            occupied = any(
+                actor.floor == gate.door.floor and abs(actor.x - gate.door.x) < GATE_HALF_WIDTH + ACTOR_RADIUS
+                for actor in actors
+            )
+            state.open = state.pressed or state.grace > 0 or (state.open and occupied)
