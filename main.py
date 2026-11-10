@@ -1,8 +1,8 @@
 from time import perf_counter
 
 from pico2d import (
-    SDL_KEYDOWN, SDL_KEYUP, SDL_QUIT, SDLK_a, SDLK_BACKSPACE, SDLK_c,
-    SDLK_DOWN, SDLK_ESCAPE, SDLK_LEFT, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
+    SDL_KEYDOWN, SDL_KEYUP, SDL_QUIT, SDLK_0, SDLK_4, SDLK_a, SDLK_BACKSPACE, SDLK_c,
+    SDLK_DOWN, SDLK_e, SDLK_ESCAPE, SDLK_LEFT, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
     SDLK_s, SDLK_UP, clear_canvas, close_canvas, delay, get_events,
     hide_lattice, open_canvas, update_canvas,
 )
@@ -54,7 +54,7 @@ def main():
                     continue
                 if key == SDLK_r or (key == SDLK_RETURN and world.result == 'cleared'):
                     index = world.index if key == SDLK_r else (world.index + 1) % len(STAGES)
-                    world = World(index)
+                    world = World(index, weapon_index=world.weapon_index)
                     pressed.clear()
                     pending_stairs = 0
                     pending_attack = False
@@ -71,6 +71,11 @@ def main():
                     pending_attack = False
                 elif key == SDLK_BACKSPACE:
                     world.cancel_recording()
+                elif key == SDLK_e and key not in pressed:
+                    pressed.add(key)
+                    world.toggle_lever()
+                elif SDLK_0 <= key <= SDLK_4:
+                    world.select_weapon(key - SDLK_0)
                 elif key in (SDLK_a, SDLK_s) and world.recording is None:
                     pending_attack = True
 

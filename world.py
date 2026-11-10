@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 
 from stages import (
-    ACTOR_RADIUS, ATTACK_COOLDOWN, ATTACK_RANGE, DOOR_GRACE, ENEMY_KINDS,
+    ACTOR_RADIUS, DOOR_GRACE, ENEMY_KINDS,
     GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MAX_RECORD_SECONDS, MOVE_SPEED,
-    PLATE_RANGE, RIGHT, STAIR_RANGE, STAGES, STEP, EnemySpawn, Point,
+    PLATE_RANGE, RIGHT, STAIR_RANGE, STAGES, STEP, WEAPONS, EnemySpawn, Point,
 )
 
 
@@ -46,6 +46,7 @@ class DoorState:
     pressed: bool = False
     open: bool = False
     grace: float = 0
+    latched: bool = False
 
 
 @dataclass
@@ -67,7 +68,7 @@ def approach_direction(start: float, end: float) -> int:
 
 
 class World:
-    def __init__(self, index: int = 0):
+    def __init__(self, index: int = 0, weapon_index: int = 0):
         self.index = index
         self.stage = STAGES[index]
         self.player = Actor.at(self.stage.start)
@@ -79,6 +80,7 @@ class World:
             for spawn in self.stage.enemies
         ]
         self.health = MAX_HEALTH
+        self.weapon_index = weapon_index
         self.invulnerable = 0.0
         self.attack_cooldown = 0.0
         self.attack_flash = 0.0
@@ -91,6 +93,21 @@ class World:
     def notify(self, message: str):
         self.message = message
         self.message_time = 2.2
+
+    def select_weapon(self, index: int):
+        if self.recording is None and self.attack_flash == 0:
+            self.weapon_index = index
+
+    def toggle_lever(self):
+        if self.result != 'playing' or self.recording is not None:
+            return
+        for gate, state in zip(self.stage.gates, self.doors):
+            if gate.lever is not None and self._near(self.player, gate.lever, 28):
+                state.latched = not state.latched
+                self._update_doors(0)
+                action = '열린 상태로 고정했습니다.' if state.latched else '고정을 풀었습니다.'
+                self.notify(f'{gate.label} 문을 {action}')
+                break
 
     def toggle_recording(self):
         if self.result != 'playing':
@@ -209,7 +226,7 @@ class World:
                 actor.floor == gate.door.floor and abs(actor.x - gate.door.x) < GATE_HALF_WIDTH + ACTOR_RADIUS
                 for actor in occupants
             )
-            state.open = state.pressed or state.grace > 0 or (state.open and occupied)
+            state.open = state.latched or state.pressed or state.grace > 0 or (state.open and occupied)
 
     def _remove_echo(self):
         if self.echo is None:
@@ -227,16 +244,17 @@ class World:
         return not any(left < wall < right for wall in self._barriers(first.floor))
 
     def _attack(self):
-        self.attack_cooldown = ATTACK_COOLDOWN
+        weapon = WEAPONS[self.weapon_index]
+        self.attack_cooldown = weapon.cooldown
         self.attack_flash = 0.14
         for enemy in self.enemies:
             offset = enemy.actor.x - self.player.x
-            if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, ATTACK_RANGE):
+            if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, weapon.reach):
                 continue
             if enemy.health is None:
                 self.notify('이 적은 분신으로 유인하거나 우회하세요.')
             else:
-                enemy.health -= 1
+                enemy.health = max(0, enemy.health - weapon.damage)
                 enemy.flash = 0.19
         self.enemies = [enemy for enemy in self.enemies if enemy.health != 0]
 

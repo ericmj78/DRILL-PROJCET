@@ -8,7 +8,7 @@ from pico2d import pico2d as canvas
 
 from animation import AttackCycle, WalkCycle, draw_region
 from monster_walk import MONSTER_GAITS, MonsterWalk
-from stages import ENEMY_KINDS, FLOOR_Y, GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MAX_RECORD_SECONDS, RIGHT, STAGES, STEP
+from stages import ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, MAX_RECORD_SECONDS, STAGES, STEP, WEAPONS
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -22,8 +22,25 @@ GOLD = (245, 181, 100)
 RED = (249, 107, 109)
 PURPLE = (203, 145, 238)
 ASSETS = Path(__file__).resolve().parent / 'assets'
-CHAMBER_TILE = (721, 247, 413, 157)
-FLOOR_TILE = (738, 416, 393, 30)
+# Pixel rows of the floor surfaces in each full-stage image, lowest floor first.
+MAP_ART = {
+    1: ('map_sections/stage-01-detailed.png', (773,)),
+    2: ('map_sections/stage-06-detailed.png', (675, 439)),
+    3: ('map_sections/stage-10-detailed.png', (775, 547, 327)),
+}
+PLATE_FRAMES = ((110, 316, 850, 176), (1207, 316, 850, 176))
+GATE_FRAMES = ((322, 14, 384, 820), (1135, 14, 384, 820))
+EXIT_FRAME = (40, 34, 908, 1504)
+LADDER_FRAME = (263, 4, 361, 1766)
+LEVER_FRAMES = ((210, 132, 646, 535), (1324, 132, 646, 535))
+WEAPON_SPRITES = {
+    1: ((247, 111, 143, 461), 32, 0.81),
+    2: ((848, 8, 201, 586), 52, 0.84),
+    3: ((173, 703, 299, 466), 43, 0.72),
+    4: ((884, 625, 126, 601), 62, 0.76),
+}
+# Hand position and weapon angle for the four right-facing attack poses.
+WEAPON_SWING = ((14, 65, -28), (25, 69, 26), (34, 74, 82), (14, 65, 18))
 
 
 def box(left, bottom, right, top, color, filled=True):
@@ -38,6 +55,11 @@ def load_asset(name):
     return load_image(str(ASSETS / name))
 
 
+def draw_grounded(image, region, x, y, height):
+    width = round(height * region[2] / region[3])
+    draw_region(image, region, x - width / 2, y, width, height)
+
+
 class View:
     def __init__(self):
         fallback = Path(environ['PICO2D_DATA_PATH']) / 'ConsolaMalgun.ttf'
@@ -50,7 +72,16 @@ class View:
         self.display = load_font(str(bold if bold.exists() else fallback), 47)
         self.background = load_asset('dungeon.png')
         self.title_art = load_asset('title_art.png')
-        self.stone_art = load_asset('dungeon_stone.png')
+        self.stage_art = {}
+        for floor_count, (name, rows) in MAP_ART.items():
+            image = load_asset(name)
+            self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
+        self.plate_art = load_asset('dungeon_props/pressure-plate.png')
+        self.gate_art = load_asset('dungeon_props/portcullis.png')
+        self.exit_art = load_asset('dungeon_props/exit-portal.png')
+        self.ladder_art = load_asset('dungeon_props/ladder.png')
+        self.lever_art = load_asset('dungeon_props/lever.png')
+        self.weapon_art = load_asset('dungeon_props/weapon-atlas.png')
         self.player = load_asset('player.png')
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
@@ -85,12 +116,12 @@ class View:
         )
 
     def draw(self, world, screen):
-        self.background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
         if screen == 'intro':
+            self.background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
             self._draw_title()
             return
-        offset = (len(FLOOR_Y) - world.stage.floors) * 82
-        self.floor_y = tuple(y + offset for y in FLOOR_Y)
+        image, self.floor_y = self.stage_art[world.stage.floors]
+        image.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
         self._draw_map(world)
         self._draw_characters(world)
         self._draw_hud(world)
@@ -104,24 +135,16 @@ class View:
 
     def _draw_map(self, world):
         stage = world.stage
-        for floor, y in enumerate(self.floor_y[:stage.floors]):
-            for tile, (left, right) in enumerate(((30, 384), (384, 737), (737, 1091))):
-                draw_region(self.stone_art, CHAMBER_TILE, left, y, right - left, 130, flip=tile == 1)
-                draw_region(self.stone_art, FLOOR_TILE, left, y - 20, right - left, 20, flip=tile == 1)
-            box(30, y, 1090, y + 130, (4, 14, 29, 78))
-            line(30, y + 130, 1090, y + 130, (40, 60, 80))
-            line(30, y - 1, 1090, y - 1, (75, 105, 129))
+        for floor, y in enumerate(self.floor_y):
             box(31, y + 108, 57, y + 127, INK)
             self.small.draw(34, y + 117, f'{floor + 1}F', MUTED)
 
         for stair in stage.stairs:
             y = self.floor_y[stair.lower]
             upper = self.floor_y[stair.lower + 1]
-            for x in (stair.x - 11, stair.x + 11):
-                line(x, y + 5, x, upper + 8, (126, 111, 87))
-            for rung in range(y + 9, upper + 7, 12):
-                line(stair.x - 11, rung, stair.x + 11, rung, (185, 158, 113))
-            self.small.draw(stair.x + 17, y + 17, '↑/↓', GOLD)
+            draw_grounded(self.ladder_art, LADDER_FRAME, stair.x, y, upper - y + 8)
+            self.small.draw(stair.x + 20, y + 17, '↑', GOLD)
+            self.small.draw(stair.x + 20, upper + 17, '↓', GOLD)
 
         for wall in stage.walls:
             y = self.floor_y[wall.floor]
@@ -132,23 +155,19 @@ class View:
         for gate, state in zip(stage.gates, world.doors):
             px, py = gate.plate.x, self.floor_y[gate.plate.floor]
             gx, gy = gate.door.x, self.floor_y[gate.door.floor]
-            color = CYAN if state.open else GOLD
-            box(px - 28, py, px + 28, py + 5, color)
-            box(px - 22, py + 6, px + 22, py + 8, (32, 97, 100) if state.pressed else (110, 77, 46))
-            self.small.draw(px - 23, py - 11, f'{gate.label} 발판', color)
-            box(gx - 24, gy, gx + 24, gy + 91, color, filled=False)
-            if not state.open:
-                box(gx - 12, gy, gx + 12, gy + 90, (74, 47, 38))
-                for bar in range(-12, 13, 6):
-                    line(gx + bar, gy, gx + bar, gy + 89, (169, 111, 64))
-            box(gx - 19, gy + 92, gx + 19, gy + 113, PANEL)
-            self.small.draw(gx - 13, gy + 102, f'{gate.label} 문', color)
+            draw_grounded(self.plate_art, PLATE_FRAMES[state.pressed], px, py, 13)
+            self.small.draw(px - 23, py - 12, f'{gate.label} 발판', CYAN if state.pressed else GOLD)
+            draw_grounded(self.gate_art, GATE_FRAMES[state.open], gx, gy, 112)
+            box(gx - 21, gy + 114, gx + 21, gy + 134, PANEL)
+            self.small.draw(gx - 15, gy + 124, f'{gate.label} 문', CYAN if state.open else GOLD)
+            if gate.lever is not None:
+                lx, ly = gate.lever.x, self.floor_y[gate.lever.floor]
+                draw_grounded(self.lever_art, LEVER_FRAMES[state.latched], lx, ly, 34)
+                self.small.draw(lx - 20, ly + 45, 'E 레버', CYAN if state.latched else GOLD)
 
         x, y = stage.exit.x, self.floor_y[stage.exit.floor]
-        box(x - 26, y, x + 26, y + 88, (12, 56, 66, 235))
-        box(x - 26, y, x + 26, y + 88, CYAN, filled=False)
-        box(x - 18, y + 3, x + 18, y + 79, (24, 88, 94, 205), filled=False)
-        self.small.draw(x - 18, y + 102, '출구', CYAN)
+        draw_grounded(self.exit_art, EXIT_FRAME, x, y, 105)
+        self.small.draw(x - 15, y + 116, '출구', CYAN)
 
     def _draw_characters(self, world):
         recording = world.recording
@@ -189,20 +208,21 @@ class View:
             player_alpha = 130
         if world.attack_flash > 0:
             progress = 1 - world.attack_flash / 0.14
+            floor = self.floor_y[world.player.floor]
             self.player_attack.draw(
-                world.player, self.floor_y[world.player.floor], progress, opacity=player_alpha,
+                world.player, floor, progress, opacity=player_alpha,
             )
-        else:
-            self._avatar(self.player, self.player_walk, world.player, opacity=player_alpha)
-        if world.attack_flash > 0:
-            attack_progress = 1 - world.attack_flash / 0.14
-            if 0.50 <= attack_progress <= 0.78:
+            if world.weapon_index:
+                self._draw_weapon(world.player, world.weapon_index, floor, progress, player_alpha)
+            elif 0.50 <= progress <= 0.78:
                 direction = world.player.facing
                 x = world.player.x + direction * 37
-                y = self.floor_y[world.player.floor] + 66
+                y = floor + 66
                 line(x - direction * 5, y + 3, x, y + 10, GOLD)
                 line(x + direction * 4, y + 3, x + direction * 11, y + 3, GOLD)
                 line(x - direction * 3, y - 3, x + direction * 2, y - 8, GOLD)
+        else:
+            self._avatar(self.player, self.player_walk, world.player, opacity=player_alpha)
         if recording is not None:
             self._avatar(self.echo, self.echo_walk, recording.preview)
             actor = recording.preview
@@ -214,6 +234,23 @@ class View:
         color = CYAN if recording else WHITE
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
+
+    def _draw_weapon(self, actor, index, floor_y, progress, opacity):
+        region, height, grip = WEAPON_SPRITES[index]
+        width = round(height * region[2] / region[3])
+        hand_x, hand_y, angle = WEAPON_SWING[min(int(progress * 4), 3)]
+        grip_y = round(height * grip)
+        center = canvas.SDL_Point(width // 2, grip_y)
+        left = actor.x + actor.facing * hand_x - center.x
+        bottom = floor_y + hand_y + grip_y - height
+        target = canvas.to_sdl_rect(left, bottom, width, height)
+        texture = self.weapon_art.texture
+        canvas.SDL_SetTextureAlphaMod(texture, opacity)
+        canvas.SDL_RenderCopyEx(
+            canvas.renderer, texture, canvas.SDL_Rect(*region), target,
+            angle * actor.facing, center, canvas.SDL_FLIP_NONE,
+        )
+        canvas.SDL_SetTextureAlphaMod(texture, 255)
 
     def _draw_enemy_attack(self, enemy, kind, floor_y, feet, tint, windup=None, recovery=None):
         walk = self.enemy_walk[enemy.spawn.kind]
@@ -260,9 +297,11 @@ class View:
         line(28, 626, WIDTH - 28, 626, LINE)
         self.small.draw(32, 687, 'ECHO ESCAPE  /  STAGE', CYAN)
         self.heading.draw(32, 654, world.stage.title, WHITE)
-        self.small.draw(364, 684, '상태', MUTED)
+        self.small.draw(340, 684, '상태', MUTED)
         color, label = (CYAN, '녹화 중 · 시간 정지') if world.recording else (WHITE, '본체 조작 · 일반 진행')
-        self.body.draw(364, 653, label, color)
+        self.body.draw(340, 653, label, color)
+        self.small.draw(557, 684, '무기', MUTED)
+        self.small.draw(557, 653, WEAPONS[world.weapon_index].name, GOLD)
         if world.recording is not None:
             seconds = len(world.recording.inputs) * STEP
             value = seconds / MAX_RECORD_SECONDS
@@ -286,7 +325,7 @@ class View:
         box(0, 0, WIDTH, 104, INK)
         line(28, 103, WIDTH - 28, 103, LINE)
         self.small.draw(33, 78, world.stage.hint, WHITE)
-        self.small.draw(33, 45, '← →  이동     ↑ ↓  사다리     C  녹화/재현     A/S  공격     Backspace  녹화 취소     R  재시작     Esc  종료', MUTED)
+        self.small.draw(33, 45, '← → 이동   ↑ ↓ 사다리   C 녹화/재현   A/S 공격   E 레버   0–4 무기   Backspace 녹화 취소   R 재시작   Esc 종료', MUTED)
         if world.message_time > 0:
             self.small.draw(33, 18, world.message, GOLD)
 
