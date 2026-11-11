@@ -22,6 +22,8 @@ def main():
             canvas.renderer = canvas.SDL_CreateRenderer(canvas.window, -1, canvas.SDL_RENDERER_SOFTWARE)
         if not canvas.renderer:
             raise RuntimeError(canvas.SDL_GetError().decode('utf-8', errors='replace'))
+        canvas.SDL_SetWindowFullscreen(canvas.window, canvas.SDL_WINDOW_FULLSCREEN_DESKTOP)
+        canvas.SDL_RenderSetLogicalSize(canvas.renderer, WIDTH, HEIGHT)
         hide_lattice()
         canvas.SDL_SetRenderDrawBlendMode(canvas.renderer, canvas.SDL_BLENDMODE_BLEND)
         view = View()

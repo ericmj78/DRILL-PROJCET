@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-LEFT, RIGHT = 48, 1072
+LEFT, RIGHT = 48, 2192
 FLOOR_Y = (156, 320, 484)
 STEP = 1 / 60
 MOVE_SPEED = 230
@@ -94,14 +94,17 @@ class Stage:
 STAGES = (
     Stage(
         '01  잔향의 문',
-        'C로 녹화 → A 발판에서 약 4초 대기 → C로 재현 → 본체로 문 통과',
-        1, Point(112, 0), Point(1022, 0),
-        gates=(Gate('A', Point(267, 0), Point(740, 0), lever=Point(820, 0)),),
+        '분신으로 A와 B 발판을 차례로 유지하며 두 문을 통과하세요.',
+        1, Point(112, 0), Point(2100, 0),
+        gates=(
+            Gate('A', Point(267, 0), Point(740, 0), lever=Point(820, 0)),
+            Gate('B', Point(1040, 0), Point(1510, 0)),
+        ),
     ),
     Stage(
         '02  사냥꾼의 시야',
         '분신으로 아래층 A 발판을 유지하고, 본체는 왼쪽 사다리로 윗길을 달리세요.',
-        2, Point(111, 0), Point(1022, 1),
+        2, Point(111, 0), Point(2100, 1),
         stairs=(Stair(145, 0), Stair(659, 0)),
         gates=(Gate('A', Point(401, 0), Point(794, 1)),),
         enemies=(EnemySpawn('beast', Point(720, 0), (623, 818)),),
@@ -110,7 +113,7 @@ STAGES = (
     Stage(
         '03  세 층의 봉인',
         'A 문을 지난 뒤 B 발판으로 새로 녹화하세요. 보라색 체력 표시가 있는 적은 A/S로 공격할 수 있어요.',
-        3, Point(112, 0), Point(1043, 2),
+        3, Point(112, 0), Point(2100, 2),
         stairs=(Stair(151, 0), Stair(651, 1)),
         gates=(
             Gate('A', Point(324, 0), Point(552, 1)),
@@ -125,27 +128,27 @@ STAGES = (
     Stage(
         '04  반대편 발판',
         '분신을 왼쪽 A 발판에 약 4초 두고, 본체는 오른쪽으로 달려 문을 통과하세요.',
-        1, Point(340, 0), Point(1024, 0),
+        1, Point(340, 0), Point(2100, 0),
         gates=(Gate('A', Point(160, 0), Point(900, 0)),),
     ),
     Stage(
         '05  아래층의 열쇠',
         '분신만 사다리로 내려가 A 발판에 약 4초 머물게 하세요. 본체는 위층 왼쪽 출구로 가세요.',
-        2, Point(945, 1), Point(104, 1),
-        stairs=(Stair(910, 0),),
-        gates=(Gate('A', Point(790, 0), Point(300, 1)),),
+        2, Point(2065, 1), Point(104, 1),
+        stairs=(Stair(2030, 0),),
+        gates=(Gate('A', Point(1910, 0), Point(1420, 1)),),
     ),
     Stage(
         '06  시야 밖의 길',
         '위층에서 추적을 끊고, 분신으로 적을 왼쪽에 유인하세요. 본체는 오른쪽 사다리로 내려가세요.',
-        2, Point(310, 0), Point(1024, 0),
+        2, Point(310, 0), Point(2100, 0),
         stairs=(Stair(320, 0), Stair(680, 0)),
         enemies=(EnemySpawn('beast', Point(520, 0), (460, 635)),),
     ),
     Stage(
         '07  사다리 밑의 기다림',
         '분신이 2층 A 발판을 밟고 오른쪽으로 적을 유인하면, 문을 지난 본체는 오른쪽 사다리로 오르세요.',
-        2, Point(111, 0), Point(1024, 1),
+        2, Point(111, 0), Point(2100, 1),
         stairs=(Stair(145, 0), Stair(928, 0)),
         gates=(Gate('A', Point(440, 1), Point(800, 0)),),
         enemies=(EnemySpawn('beast', Point(820, 1), (760, 890)),),
@@ -154,16 +157,16 @@ STAGES = (
         '08  두 번째 잔향',
         'A 문을 지나 사다리 앞에서 B 발판으로 새 분신을 녹화하세요. 본체는 올라가 왼쪽으로 가세요.',
         2, Point(120, 0), Point(105, 1),
-        stairs=(Stair(730, 0),),
+        stairs=(Stair(1300, 0),),
         gates=(
             Gate('A', Point(245, 0), Point(540, 0)),
-            Gate('B', Point(905, 0), Point(475, 1)),
+            Gate('B', Point(1490, 0), Point(1050, 1)),
         ),
     ),
     Stage(
         '09  되돌아가는 발자국',
         'A 문을 지난 뒤 새 분신을 사다리 너머 왼쪽 B 발판으로 보내세요. 본체는 2층에서 오른쪽으로 가세요.',
-        3, Point(112, 0), Point(1023, 2),
+        3, Point(112, 0), Point(2100, 2),
         stairs=(Stair(690, 0), Stair(950, 1)),
         gates=(
             Gate('A', Point(220, 0), Point(520, 0)),
@@ -174,7 +177,7 @@ STAGES = (
     Stage(
         '10  마지막 잔향',
         'A 문을 지나 첫 사다리 앞에서 1층 B 발판으로 새 분신을 녹화하고, 본체는 3층 출구로 가세요.',
-        3, Point(100, 0), Point(1030, 2),
+        3, Point(100, 0), Point(2100, 2),
         stairs=(Stair(670, 0), Stair(953, 1)),
         gates=(
             Gate('A', Point(252, 0), Point(510, 0), lever=Point(590, 0)),
