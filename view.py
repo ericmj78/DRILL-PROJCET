@@ -134,8 +134,11 @@ class View:
         image, self.floor_y = self.stage_art[world.stage.floors]
         focus = world.recording.preview if world.recording else world.player
         self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
-        image.draw(WIDTH / 2 - self.camera_x, HEIGHT / 2, WIDTH, HEIGHT)
-        image.composite_draw(0, 'h', WIDTH * 1.5 - self.camera_x, HEIGHT / 2, WIDTH, HEIGHT)
+        # Multi-floor artwork includes a dark picture frame at both sides.
+        # Crop that frame and draw the corridor as one continuous wide image.
+        edge = 38 if world.stage.floors > 1 else 0
+        draw_region(image, (edge, 0, image.w - edge * 2, image.h),
+                    -self.camera_x, 0, WIDTH * 2, HEIGHT)
         if world.index == 0:
             frame = int(world.time * 10) % 8
             for x in (560, 1680):
