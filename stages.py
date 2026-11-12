@@ -100,6 +100,7 @@ STAGES = (
             Gate('A', Point(267, 0), Point(740, 0), lever=Point(820, 0)),
             Gate('B', Point(1040, 0), Point(1510, 0)),
         ),
+        enemies=(EnemySpawn('crawler', Point(1820, 0), (1740, 1920)),),
     ),
     Stage(
         '02  사냥꾼의 시야',
@@ -107,7 +108,10 @@ STAGES = (
         2, Point(111, 0), Point(2100, 1),
         stairs=(Stair(145, 0), Stair(659, 0)),
         gates=(Gate('A', Point(401, 0), Point(794, 1)),),
-        enemies=(EnemySpawn('beast', Point(720, 0), (623, 818)),),
+        enemies=(
+            EnemySpawn('beast', Point(720, 0), (623, 818)),
+            EnemySpawn('watcher', Point(1650, 1), (1550, 1750)),
+        ),
         walls=(Point(992, 0),),
     ),
     Stage(
@@ -123,6 +127,7 @@ STAGES = (
             EnemySpawn('warden', Point(845, 0), (744, 978)),
             EnemySpawn('crawler', Point(901, 1), (830, 1019)),
             EnemySpawn('watcher', Point(976, 2), (950, 1004)),
+            EnemySpawn('crawler', Point(1680, 2), (1580, 1780)),
         ),
     ),
     Stage(
@@ -130,6 +135,7 @@ STAGES = (
         '분신을 왼쪽 A 발판에 약 4초 두고, 본체는 오른쪽으로 달려 문을 통과하세요.',
         1, Point(340, 0), Point(2100, 0),
         gates=(Gate('A', Point(160, 0), Point(900, 0)),),
+        enemies=(EnemySpawn('watcher', Point(1660, 0), (1560, 1760)),),
     ),
     Stage(
         '05  아래층의 열쇠',
@@ -137,13 +143,17 @@ STAGES = (
         2, Point(2065, 1), Point(104, 1),
         stairs=(Stair(2030, 0),),
         gates=(Gate('A', Point(1910, 0), Point(1420, 1)),),
+        enemies=(EnemySpawn('crawler', Point(650, 1), (550, 750)),),
     ),
     Stage(
         '06  시야 밖의 길',
         '위층에서 추적을 끊고, 분신으로 적을 왼쪽에 유인하세요. 본체는 오른쪽 사다리로 내려가세요.',
         2, Point(310, 0), Point(2100, 0),
         stairs=(Stair(320, 0), Stair(680, 0)),
-        enemies=(EnemySpawn('beast', Point(520, 0), (460, 635)),),
+        enemies=(
+            EnemySpawn('beast', Point(520, 0), (460, 635)),
+            EnemySpawn('watcher', Point(1650, 0), (1550, 1750)),
+        ),
     ),
     Stage(
         '07  사다리 밑의 기다림',
@@ -151,7 +161,10 @@ STAGES = (
         2, Point(111, 0), Point(2100, 1),
         stairs=(Stair(145, 0), Stair(928, 0)),
         gates=(Gate('A', Point(440, 1), Point(800, 0)),),
-        enemies=(EnemySpawn('beast', Point(820, 1), (760, 890)),),
+        enemies=(
+            EnemySpawn('beast', Point(820, 1), (760, 890)),
+            EnemySpawn('crawler', Point(1650, 1), (1550, 1750)),
+        ),
     ),
     Stage(
         '08  두 번째 잔향',
@@ -162,6 +175,7 @@ STAGES = (
             Gate('A', Point(245, 0), Point(540, 0)),
             Gate('B', Point(1490, 0), Point(1050, 1)),
         ),
+        enemies=(EnemySpawn('watcher', Point(650, 1), (550, 750)),),
     ),
     Stage(
         '09  되돌아가는 발자국',
@@ -172,7 +186,10 @@ STAGES = (
             Gate('A', Point(220, 0), Point(520, 0)),
             Gate('B', Point(548, 1), Point(835, 1)),
         ),
-        enemies=(EnemySpawn('crawler', Point(929, 1), (885, 1000)),),
+        enemies=(
+            EnemySpawn('crawler', Point(929, 1), (885, 1000)),
+            EnemySpawn('watcher', Point(1650, 2), (1550, 1750)),
+        ),
     ),
     Stage(
         '10  마지막 잔향',
@@ -186,6 +203,7 @@ STAGES = (
         enemies=(
             EnemySpawn('beast', Point(1008, 0), (948, 1060)),
             EnemySpawn('watcher', Point(955, 1), (905, 1005)),
+            EnemySpawn('crawler', Point(1650, 2), (1550, 1750)),
         ),
     ),
 )
