@@ -170,6 +170,85 @@ class View:
             box(31, y + 108, 57, y + 127, INK)
             self.small.draw(34, y + 117, f'{floor + 1}F', MUTED)
 
+        if stage.sequence is not None:
+            for index, sensor in enumerate(stage.sequence.sensors):
+                x = sensor.x - self.camera_x
+                y = self.floor_y[sensor.floor]
+                color = CYAN if index < world.sequence_progress else GOLD
+                box(x - 18, y, x + 18, y + 7, color)
+                self.small.draw(x - 4, y + 19, str(index + 1), color)
+            x = stage.sequence.door.x - self.camera_x
+            y = self.floor_y[stage.sequence.door.floor]
+            draw_grounded(self.gate_art, GATE_FRAMES[world.sequence_unlocked], x, y, 112)
+            self.small.draw(x - 35, y + 125, f'보안 {world.sequence_progress}/3', CYAN if world.sequence_unlocked else GOLD)
+
+        if stage.sync_gate is not None:
+            gate = stage.sync_gate
+            for sensor, label, active in ((gate.player_sensor, '본체', world.sync_player_time),
+                                          (gate.echo_sensor, '분신', world.sync_echo_time)):
+                x, y = sensor.x - self.camera_x, self.floor_y[sensor.floor]
+                color = CYAN if active is not None or world.sync_unlocked else GOLD
+                line(x, y, x, y + 70, color)
+                self.small.draw(x - 15, y + 82, label, color)
+            x, y = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
+            draw_grounded(self.gate_art, GATE_FRAMES[world.sync_unlocked], x, y, 112)
+            self.small.draw(x - 30, y + 125, '동시 통과', CYAN if world.sync_unlocked else GOLD)
+
+        if world.echo is not None:
+            for hazard in stage.hidden_hazards:
+                if world.echo.actor.floor == hazard.floor and abs(world.echo.actor.x - hazard.x) <= 120:
+                    x, y = hazard.x - self.camera_x, self.floor_y[hazard.floor]
+                    box(x - 18, y, x + 18, y + 10, RED)
+                    self.small.draw(x - 15, y + 22, '함정', RED)
+
+        if stage.guard is not None:
+            x, y = stage.guard.x - self.camera_x, self.floor_y[stage.guard.floor]
+            color = CYAN if world.guard_open_time > 0 else RED
+            self.small.draw(x - 40, y + 145, '지나가세요!' if world.guard_open_time > 0 else '수호자 방어', color)
+
+        if stage.watch_gate is not None:
+            gate = stage.watch_gate
+            x, y = gate.focus.x - self.camera_x, self.floor_y[gate.focus.floor]
+            color = CYAN if world.watch_active else GOLD
+            line(x - 65, y + 10, x + 65, y + 10, color)
+            box(x - 10, y + 82, x + 10, y + 96, color)
+            target_x = world.echo.actor.x - self.camera_x if world.watch_active else x + 50 * sin(world.time)
+            line(x, y + 82, target_x, y + 35, color)
+            self.small.draw(x - 35, y + 27, '감시 구역', color)
+            gx, gy = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
+            draw_grounded(self.gate_art, GATE_FRAMES[world.watch_active], gx, gy, 112)
+            self.small.draw(gx - 35, gy + 125, '시선 분산', color)
+
+        if stage.isolation is not None:
+            room = stage.isolation
+            for point, is_open, label in ((room.door, not world.isolation_closed, '격리실'),
+                                          (room.exit_gate, world.isolation_closed, '보안문')):
+                x, y = point.x - self.camera_x, self.floor_y[point.floor]
+                draw_grounded(self.gate_art, GATE_FRAMES[is_open], x, y, 112)
+                self.small.draw(x - 25, y + 125, label, CYAN if is_open else GOLD)
+            x, y = room.lever.x - self.camera_x, self.floor_y[room.lever.floor]
+            draw_grounded(self.lever_art, LEVER_FRAMES[world.isolation_closed], x, y, 34)
+            self.small.draw(x - 25, y + 45, 'E 격리', CYAN if world.isolation_closed else GOLD)
+
+        if stage.bridge is not None:
+            for point, remaining in zip(stage.bridge.points, world.bridge_timers):
+                x, y = point.x - self.camera_x, self.floor_y[point.floor]
+                box(x - 28, y - 4, x + 28, y + 7, CYAN if remaining > 0 else INK)
+                self.small.draw(x - 22, y + 19, '발판' if remaining > 0 else '빈 길', CYAN if remaining > 0 else MUTED)
+
+        if stage.lift is not None:
+            lift = stage.lift
+            x, y = lift.weight.x - self.camera_x, self.floor_y[lift.weight.floor]
+            active = world.echo is not None and world._near(world.echo.actor, lift.weight, 22)
+            box(x - 25, y, x + 25, y + 8, CYAN if active else GOLD)
+            self.small.draw(x - 32, y + 20, '균형 발판', CYAN if active else GOLD)
+            x = lift.platform.x - self.camera_x
+            low = self.floor_y[lift.platform.floor]
+            high = self.floor_y[lift.platform.floor + 1]
+            y = low + (high - low) * world.lift_progress
+            box(x - 35, y - 5, x + 35, y + 5, CYAN)
+            self.small.draw(x - 22, y + 16, '승강', CYAN)
+
         for stair in stage.stairs:
             x = stair.x - self.camera_x
             y = self.floor_y[stair.lower]
@@ -242,6 +321,12 @@ class View:
         if world.invulnerable > 0 and int(world.time * 18) % 2:
             player_alpha = 130
         player = self._screen_actor(world.player)
+        normal_floors = self.floor_y
+        if world.lift_riding:
+            lower = world.stage.lift.platform.floor
+            floors = list(self.floor_y)
+            floors[lower] += (floors[lower + 1] - floors[lower]) * world.lift_progress
+            self.floor_y = tuple(floors)
         if world.attack_flash > 0:
             progress = 1 - world.attack_flash / 0.14
             floor = self.floor_y[world.player.floor]
@@ -259,6 +344,7 @@ class View:
                 line(x - direction * 3, y - 3, x + direction * 2, y - 8, GOLD)
         else:
             self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
+        self.floor_y = normal_floors
         if recording is not None:
             actor = self._screen_actor(recording.preview)
             self._avatar(self.echo, self.echo_walk, actor)
