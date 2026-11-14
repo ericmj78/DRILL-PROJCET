@@ -11,7 +11,8 @@ from pico2d import pico2d as canvas
 
 from animation import AttackCycle, WalkCycle, draw_region
 from monster_walk import MONSTER_GAITS, MonsterWalk
-from stages import ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, MAX_RECORD_SECONDS, RIGHT, STAGES, STEP, WEAPONS
+from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, MAX_RECORD_SECONDS, RIGHT, STAGES, STEP, WEAPONS
+from world import JUMP_DURATION
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -28,7 +29,6 @@ ASSETS = Path(__file__).resolve().parent / 'assets'
 # Pixel rows of the floor surfaces in each full-stage image, lowest floor first.
 MAP_ART = {
     1: ('map_sections/stage-01-detailed.png', (773,)),
-    2: ('map_sections/stage-06-detailed.png', (675, 439)),
     3: ('map_sections/stage-10-detailed.png', (775, 547, 327)),
 }
 PLATE_FRAMES = ((110, 316, 850, 176), (1207, 316, 850, 176))
@@ -38,12 +38,21 @@ LADDER_FRAME = (263, 4, 361, 1766)
 LEVER_FRAMES = ((210, 132, 646, 535), (1324, 132, 646, 535))
 WEAPON_SPRITES = {
     1: ((247, 111, 143, 461), 32, 0.81),
-    2: ((848, 8, 201, 586), 52, 0.84),
+    2: ((335, 48, 355, 1450), 65, 0.84),
     3: ((173, 703, 299, 466), 43, 0.72),
     4: ((884, 625, 126, 601), 62, 0.76),
 }
 # Hand position and weapon angle for the four right-facing attack poses.
 WEAPON_SWING = ((14, 65, -28), (25, 69, 26), (34, 74, 82), (14, 65, 18))
+WEAPON_THRUST = ((14, 65, 80), (25, 69, 90), (38, 74, 90), (14, 65, 80))
+JUMP_FRAMES = (
+    (90, 146, 246, 280), (523, 66, 248, 358), (967, 24, 228, 362), (1410, 10, 230, 302),
+    (76, 459, 238, 354), (519, 465, 228, 392), (955, 533, 240, 340), (1430, 467, 196, 406),
+)
+# Keep the face aligned when cape and body widths change between jump poses.
+JUMP_FACE_X = (285, 715, 1145, 1595, 275, 708, 1150, 1560)
+JUMP_HEAD_LIFT = (0, 0, 0, 14, 3, -4, 0, 0)
+JUMP_POSE_ORDER = (7, 1, 2, 3, 4, 5, 6, 7)
 
 
 def box(left, bottom, right, top, color, filled=True):
@@ -83,6 +92,13 @@ class View:
         for floor_count, (name, rows) in MAP_ART.items():
             image = load_asset(name)
             self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
+        self.wizard_art = load_asset('wizard_castle/castle-dark.png')
+        self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
+        self.wizard_book = load_asset('wizard_castle/book.png')
+        self.wizard_fx = {}
+        for name in ('rain', 'storm', 'potion'):
+            data = json.loads((ASSETS / 'wizard_castle' / f'{name}.json').read_text(encoding='utf-8'))
+            self.wizard_fx[name] = (load_asset(f'wizard_castle/{name}.png'), data)
         self.plate_art = load_asset('dungeon_props/pressure-plate.png')
         self.torch_art = load_asset('dungeon_props/wall-torch-32px-strip8.png')
         self.gate_art = load_asset('dungeon_props/portcullis.png')
@@ -90,7 +106,9 @@ class View:
         self.ladder_art = load_asset('dungeon_props/ladder.png')
         self.lever_art = load_asset('dungeon_props/lever.png')
         self.weapon_art = load_asset('dungeon_props/weapon-atlas.png')
+        self.hero_sword_art = load_asset('weapons/sword-slim.png')
         self.player = load_asset('player.png')
+        self.player_jump = load_asset('player_jump_sheet.png')
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
@@ -122,6 +140,18 @@ class View:
             load_asset(watcher['sheet']), watcher['frames'],
             watcher['draw_height'], watcher['stride_per_frame'],
         )
+        for name, asset in (
+            ('jailer_boss', 'prison-jailer-boss'), ('magic_armor', 'magic-armor'),
+            ('magic_armor_guard', 'magic-armor'),
+            ('witch', 'witch'), ('grand_witch', 'grand-witch-boss'),
+        ):
+            sheet = load_asset(f'monster_concepts/{asset}-walk.png')
+            width, height = sheet.w // 4, sheet.h // 2
+            frames = [(column * width, row * height, width, height)
+                      for row in range(2) for column in range(4)]
+            self.enemy_walk[name] = WalkCycle(sheet, frames, ENEMY_KINDS[name].size, 9)
+        self.enemies['magic_book'] = load_asset('monster_concepts/magic-book-sprite.png')
+        self.enemies['potion_slime'] = load_asset('monster_concepts/potion-slime-sprite.png')
 
     def draw(self, world, screen):
         if screen == 'intro':
@@ -131,14 +161,42 @@ class View:
         if world is not self.current_world:
             self.current_world = world
             self.stage_started_at = perf_counter()
-        image, self.floor_y = self.stage_art[world.stage.floors]
         focus = world.recording.preview if world.recording else world.player
         self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
-        # Multi-floor artwork includes a dark picture frame at both sides.
-        # Crop that frame and draw the corridor as one continuous wide image.
-        edge = 38 if world.stage.floors > 1 else 0
-        draw_region(image, (edge, 0, image.w - edge * 2, image.h),
-                    -self.camera_x, 0, WIDTH * 2, HEIGHT)
+        if world.index in (1, 2):
+            # Stack the same prison corridor for each playable floor.
+            image, _ = self.stage_art[1]
+            floor_y = []
+            for floor in range(world.stage.floors):
+                bottom = 105 + floor * 520 // world.stage.floors
+                top = 105 + (floor + 1) * 520 // world.stage.floors
+                height = top - bottom
+                draw_region(image, (0, 0, image.w, image.h),
+                            -self.camera_x, bottom, WIDTH * 2, height)
+                floor_y.append(bottom + round((image.h - 773) * height / image.h))
+            self.floor_y = tuple(floor_y)
+        elif 3 <= world.index <= 6:
+            single_floor = world.stage.floors == 1
+            source_top = 330 if single_floor else 0
+            source_height = self.wizard_art.h - source_top
+            rows = (675,) if single_floor else (675, 330)
+            self.floor_y = tuple(105 + round((self.wizard_art.h - row) * 520 / source_height)
+                                 for row in rows)
+            draw_region(self.wizard_art, (0, source_top, self.wizard_art.w, source_height),
+                        -self.camera_x, 105, WIDTH * 2, 520)
+            self._draw_wizard_effects(world.time, single_floor)
+        elif world.index == 7:
+            image = self.late_two_floor_art
+            self.floor_y = tuple(105 + round((image.h - row) * 520 / image.h)
+                                 for row in (635, 333))
+            draw_region(image, (0, 0, image.w, image.h),
+                        -self.camera_x, 105, WIDTH * 2, 520)
+        else:
+            image, self.floor_y = self.stage_art[world.stage.floors]
+            # Crop the picture frame and draw the corridor as one wide image.
+            edge = 38 if world.stage.floors > 1 else 0
+            draw_region(image, (edge, 0, image.w - edge * 2, image.h),
+                        -self.camera_x, 0, WIDTH * 2, HEIGHT)
         if world.index == 0:
             frame = int(world.time * 10) % 8
             for x in (560, 1680):
@@ -163,6 +221,36 @@ class View:
                 self._card('탈출 성공', 'ECHO ESCAPE', f'{len(STAGES)}개 스테이지의 봉인을 모두 통과했습니다.', 'ENTER   처음부터 다시')
             else:
                 self._card('스테이지 완료', world.stage.title, '다음 스테이지에서 분신의 새로운 역할을 준비하세요.', 'ENTER   다음 스테이지')
+
+    def _wizard_fx_frame(self, name, frame, left, bottom, width, height, alpha=255):
+        image, data = self.wizard_fx[name]
+        rect = data['frames'][frame % len(data['frames'])]['frame']
+        canvas.SDL_SetTextureAlphaMod(image.texture, alpha)
+        draw_region(image, (rect['x'], rect['y'], rect['w'], rect['h']), left, bottom, width, height)
+        canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+
+    def _draw_wizard_effects(self, time, single_floor=False):
+        # Window positions refer to the shared, full-width castle artwork.
+        sx = WIDTH * 2 / self.wizard_art.w
+        sy = 520 / (self.wizard_art.h - (330 if single_floor else 0))
+        for x0, x1 in ((715, 880), (950, 1110), (1180, 1340), (1405, 1555), (1610, 1765)):
+            window_rows = ((410, 570),) if single_floor else ((85, 250), (410, 570))
+            for top, bottom in window_rows:
+                x = x0 * sx - self.camera_x
+                y = 105 + (self.wizard_art.h - bottom) * sy
+                width, height = (x1 - x0) * sx, (bottom - top) * sy
+                self._wizard_fx_frame('rain', int(time * 4), x, y, width, height, 115)
+                # A brief distant flash shares the same time on both floors.
+                if 9.0 <= time % 18 < 9.5:
+                    storm_frame = 12 + int((time % 18 - 9.0) * 4)
+                    self._wizard_fx_frame('storm', storm_frame, x, y, width, height, 110)
+        if not single_floor:
+            book_frame = min(3, int((time % 7) * 5)) if time % 7 < 0.8 else 0
+            book_width = self.wizard_book.w // 4
+            draw_region(self.wizard_book, (book_frame * book_width, 0, book_width, self.wizard_book.h),
+                        455 * sx - self.camera_x, 105 + (self.wizard_art.h - 260) * sy, 70, 50)
+        self._wizard_fx_frame('potion', int(time * 8), 380 * sx - self.camera_x,
+                              105 + (self.wizard_art.h - 600) * sy, 48, 62)
 
     def _draw_map(self, world):
         stage = world.stage
@@ -279,7 +367,9 @@ class View:
 
         x, y = stage.exit.x - self.camera_x, self.floor_y[stage.exit.floor]
         draw_grounded(self.exit_art, EXIT_FRAME, x, y, 105)
-        self.small.draw(x - 15, y + 116, '출구', CYAN)
+        locked = any(enemy.spawn.kind in BOSS_KINDS for enemy in world.enemies)
+        self.small.draw(x - 35 if locked else x - 15, y + 116,
+                        '보스 처치 필요' if locked else '출구', RED if locked else CYAN)
 
     def _draw_characters(self, world):
         recording = world.recording
@@ -293,7 +383,23 @@ class View:
             x = screen_enemy.actor.x
             feet = 0.30 if enemy.spawn.kind in ('beast', 'crawler') else 0.47
             tint = (255, 166, 156) if enemy.flash > 0 else (255, 255, 255)
-            if enemy.windup > 0 or enemy.recovery > 0:
+            if enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
+                if enemy.windup > 0:
+                    screen_enemy.actor.x -= screen_enemy.actor.facing * 4 * (1 - enemy.windup / 0.31)
+                elif enemy.recovery > 0:
+                    screen_enemy.actor.x += screen_enemy.actor.facing * 10 * max(0, 1 - (0.65 - enemy.recovery) / 0.12)
+                self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
+            elif enemy.spawn.kind in ('magic_book', 'potion_slime'):
+                image = self.enemies[enemy.spawn.kind]
+                bob = 5 + sin(world.time * 3) * 4 if enemy.spawn.kind == 'magic_book' else 0
+                squash = 1 + 0.07 * sin(world.time * 7) if enemy.spawn.kind == 'potion_slime' else 1
+                height = kind.size * squash
+                width = kind.size * image.w / image.h / squash
+                canvas.SDL_SetTextureColorMod(image.texture, *tint)
+                draw_region(image, (0, 0, image.w, image.h), x - width / 2, y + bob, width, height,
+                            enemy.actor.facing != -1)
+                canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+            elif enemy.windup > 0 or enemy.recovery > 0:
                 if enemy.windup > 0:
                     windup = min(1, max(0, (0.31 - enemy.windup) / 0.31))
                     recovery = None
@@ -309,7 +415,7 @@ class View:
                 )
             else:
                 self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
-            bar_y = y + (73 if feet == 0.30 else 103)
+            bar_y = y + (kind.size + 8 if enemy.spawn.kind in BOSS_KINDS else 73 if feet == 0.30 else 103)
             if enemy.health is not None:
                 box(x - 14, bar_y, x + 14, bar_y + 3, (52, 34, 67))
                 box(x - 14, bar_y, x - 14 + 28 * enemy.health / kind.health, bar_y + 3, PURPLE)
@@ -328,13 +434,13 @@ class View:
             floors[lower] += (floors[lower + 1] - floors[lower]) * world.lift_progress
             self.floor_y = tuple(floors)
         if world.attack_flash > 0:
-            progress = 1 - world.attack_flash / 0.14
-            floor = self.floor_y[world.player.floor]
+            progress = 1 - world.attack_flash / world.attack_duration
+            floor = self.floor_y[world.player.floor] + world.player.jump_height
             self.player_attack.draw(
                 player, floor, progress, opacity=player_alpha,
             )
             if world.weapon_index:
-                self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha)
+                self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha, world.attack_kind)
             elif 0.50 <= progress <= 0.78:
                 direction = world.player.facing
                 x = player.x + direction * 37
@@ -352,7 +458,7 @@ class View:
         else:
             actor = player
             marker = 'YOU'
-        x, y = actor.x, self.floor_y[actor.floor] + 104
+        x, y = actor.x, self.floor_y[actor.floor] + actor.jump_height + 104
         color = CYAN if recording else WHITE
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
@@ -362,16 +468,17 @@ class View:
         screen_actor.x -= self.camera_x
         return screen_actor
 
-    def _draw_weapon(self, actor, index, floor_y, progress, opacity):
+    def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind):
         region, height, grip = WEAPON_SPRITES[index]
         width = round(height * region[2] / region[3])
-        hand_x, hand_y, angle = WEAPON_SWING[min(int(progress * 4), 3)]
+        poses = WEAPON_SWING if attack_kind == 'slash' else WEAPON_THRUST
+        hand_x, hand_y, angle = poses[min(int(progress * 4), 3)]
         grip_y = round(height * grip)
         center = canvas.SDL_Point(width // 2, grip_y)
         left = actor.x + actor.facing * hand_x - center.x
         bottom = floor_y + hand_y + grip_y - height
         target = canvas.to_sdl_rect(left, bottom, width, height)
-        texture = self.weapon_art.texture
+        texture = (self.hero_sword_art if index == 2 else self.weapon_art).texture
         canvas.SDL_SetTextureAlphaMod(texture, opacity)
         canvas.SDL_RenderCopyEx(
             canvas.renderer, texture, canvas.SDL_Rect(*region), target,
@@ -407,7 +514,24 @@ class View:
         canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
 
     def _avatar(self, idle, walk, actor, opacity=255):
-        if actor.moving:
+        if actor.jump_time > 0:
+            phase = min(7, int(actor.jump_time * 8 / JUMP_DURATION))
+            index = JUMP_POSE_ORDER[phase]
+            region = JUMP_FRAMES[index]
+            scale = 91 / 406
+            width, height = region[2] * scale, region[3] * scale
+            face_offset = (JUMP_FACE_X[index] - region[0]) * scale - width / 2
+            face_alignment = (7 - face_offset) * actor.facing
+            texture = self.player_jump.texture
+            canvas.SDL_SetTextureAlphaMod(texture, opacity)
+            if idle is self.echo:
+                canvas.SDL_SetTextureColorMod(texture, 100, 220, 255)
+            draw_region(self.player_jump, region, actor.x - width / 2 + face_alignment,
+                        self.floor_y[actor.floor] + actor.jump_height + JUMP_HEAD_LIFT[index], width, height,
+                        actor.facing < 0)
+            canvas.SDL_SetTextureColorMod(texture, 255, 255, 255)
+            canvas.SDL_SetTextureAlphaMod(texture, 255)
+        elif actor.moving:
             walk.draw(actor, self.floor_y[actor.floor], opacity)
         else:
             breathing = sin(self.animation_time * 2.1) * 1.5
@@ -451,9 +575,11 @@ class View:
         box(0, 0, WIDTH, 104, INK)
         line(28, 103, WIDTH - 28, 103, LINE)
         self.small.draw(33, 78, world.stage.hint, WHITE)
-        self.small.draw(33, 45, '← → 이동   ↑ ↓ 사다리   C 녹화/재현   A/S 공격   E 레버   0–4 무기   Backspace 녹화 취소   R 재시작   Esc 종료', MUTED)
+        self.small.draw(33, 45, '← → 이동   Space 점프   ↑ ↓ 사다리   C 녹화   A 베기   S 찌르기   E 레버   0–4 무기   Backspace 취소   R 재시작   Esc 종료', MUTED)
         if world.message_time > 0:
             self.small.draw(33, 18, world.message, GOLD)
+        else:
+            self.small.draw(33, 18, 'P 스테이지 바로 이동', CYAN)
 
     def _draw_title(self):
         height = WIDTH * self.title_art.h / self.title_art.w
@@ -465,6 +591,17 @@ class View:
         self.body.draw(62, 298, '본체로 지하 감옥을 탈출하세요.', MUTED)
         box(62, 216, 295, 263, (23, 60, 71))
         self.body.draw(78, 240, 'ENTER   탐험 시작', CYAN)
+
+    def draw_stage_selector(self, entry):
+        box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
+        box(300, 225, 820, 495, INK)
+        box(300, 225, 820, 495, LINE, filled=False)
+        self.heading.draw(335, 452, '스테이지 바로 이동', WHITE)
+        self.body.draw(335, 401, f'이동할 번호를 입력하세요 (1~{len(STAGES)})', MUTED)
+        self.display.draw(335, 340, entry if entry else '_', CYAN)
+        if entry and not 1 <= int(entry) <= len(STAGES):
+            self.small.draw(335, 300, '범위 안의 번호를 입력하세요.', RED)
+        self.small.draw(335, 255, 'Enter 이동   Backspace 지우기   Esc 취소', GOLD)
 
     def _card(self, title, subtitle, description, action):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))

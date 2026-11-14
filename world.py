@@ -1,10 +1,13 @@
 from dataclasses import dataclass, field
 
 from stages import (
-    ACTOR_RADIUS, DOOR_GRACE, ENEMY_KINDS,
+    ACTOR_RADIUS, BOSS_KINDS, DOOR_GRACE, ENEMY_KINDS,
     GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MAX_RECORD_SECONDS, MOVE_SPEED,
     PLATE_RANGE, RIGHT, STAIR_RANGE, STAGES, STEP, WEAPONS, EnemySpawn, Point,
 )
+
+JUMP_DURATION = 0.64
+JUMP_HEIGHT = 42
 
 
 @dataclass
@@ -14,6 +17,14 @@ class Actor:
     facing: int = 1
     moving: bool = False
     walk_distance: float = 0
+    jump_time: float = 0.0
+
+    @property
+    def jump_height(self):
+        if self.jump_time <= 0:
+            return 0.0
+        progress = min(1.0, self.jump_time / JUMP_DURATION)
+        return 4 * JUMP_HEIGHT * progress * (1 - progress)
 
     @classmethod
     def at(cls, point: Point, facing: int = 1):
@@ -24,6 +35,7 @@ class Actor:
 class Motion:
     horizontal: int = 0
     stairs: int = 0
+    jump: bool = False
 
 
 @dataclass
@@ -68,7 +80,7 @@ def approach_direction(start: float, end: float) -> int:
 
 
 class World:
-    def __init__(self, index: int = 0, weapon_index: int = 0):
+    def __init__(self, index: int = 0, weapon_index: int = 2):
         self.index = index
         self.stage = STAGES[index]
         self.player = Actor.at(self.stage.start)
@@ -84,6 +96,9 @@ class World:
         self.invulnerable = 0.0
         self.attack_cooldown = 0.0
         self.attack_flash = 0.0
+        self.attack_kind = 'slash'
+        self.attack_duration = 0.28
+        self.attack_hit_pending = False
         self.time = 0.0
         self.result = 'playing'
         self.message = ''
@@ -117,7 +132,7 @@ class World:
             if self.isolation_closed:
                 self.isolation_closed = False
                 self.notify('격리실 문을 열었습니다.')
-            elif any(enemy.spawn.kind == 'beast' and enemy.actor.floor == room.door.floor and enemy.actor.x >= room.inside_x for enemy in self.enemies):
+            elif any(enemy.spawn.kind == 'magic_armor_guard' and enemy.actor.floor == room.door.floor and enemy.actor.x >= room.inside_x for enemy in self.enemies):
                 self.isolation_closed = True
                 self.notify('몬스터를 가뒀습니다. 위층 보안문이 열립니다.')
             else:
@@ -133,6 +148,9 @@ class World:
 
     def toggle_recording(self):
         if self.result != 'playing':
+            return
+        if self.recording is None and self.player.jump_time > 0:
+            self.notify('착지한 뒤 분신 녹화를 시작하세요.')
             return
         if self.lift_riding:
             self.notify('발판이 멈춘 뒤 녹화하세요.')
@@ -161,7 +179,7 @@ class World:
         self._update_doors(0)
         self.notify('녹화 상한에 도달해 재현을 시작합니다.' if time_limit else '본체 조작 재개 · 분신이 재현합니다.')
 
-    def step(self, motion: Motion = Motion(), attack: bool = False):
+    def step(self, motion: Motion = Motion(), attack: str | bool = False):
         if self.result != 'playing':
             return
         self.message_time = max(0, self.message_time - STEP)
@@ -177,6 +195,9 @@ class World:
         self.invulnerable = max(0, self.invulnerable - STEP)
         self.attack_cooldown = max(0, self.attack_cooldown - STEP)
         self.attack_flash = max(0, self.attack_flash - STEP)
+        if self.attack_hit_pending and self.attack_flash <= self.attack_duration * 0.55:
+            self.attack_hit_pending = False
+            self._apply_attack()
         player_x, player_floor = self.player.x, self.player.floor
         if not self.lift_riding:
             self._move(self.player, motion)
@@ -189,7 +210,7 @@ class World:
                     self.result = 'defeated'
                     return
         if attack and self.attack_cooldown == 0:
-            self._attack()
+            self._attack(attack if isinstance(attack, str) else 'slash')
 
         if self.echo is not None:
             previous_x = self.echo.actor.x
@@ -219,7 +240,11 @@ class World:
 
         self._update_doors(STEP)
         if self._near(self.player, self.stage.exit, 27):
-            self.result = 'cleared'
+            if any(enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies):
+                if self.message_time <= 0:
+                    self.notify('보스를 처치하면 출구가 열립니다.')
+            else:
+                self.result = 'cleared'
 
     def _barriers(self, floor: int):
         if self.stage.bridge:
@@ -264,8 +289,14 @@ class World:
     def _move(self, actor: Actor, motion: Motion):
         if motion.horizontal:
             actor.facing = motion.horizontal
+        if motion.jump and actor.jump_time == 0 and not motion.stairs:
+            actor.jump_time = STEP
+        elif actor.jump_time > 0:
+            actor.jump_time += STEP
+            if actor.jump_time >= JUMP_DURATION:
+                actor.jump_time = 0.0
         self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
-        if motion.stairs:
+        if motion.stairs and actor.jump_time == 0:
             lower = actor.floor if motion.stairs > 0 else actor.floor - 1
             for stair in self.stage.stairs:
                 if stair.lower == lower and abs(stair.x - actor.x) <= STAIR_RANGE:
@@ -275,7 +306,7 @@ class World:
 
     @staticmethod
     def _near(actor: Actor, point: Point, distance: float) -> bool:
-        return actor.floor == point.floor and abs(actor.x - point.x) <= distance
+        return actor.jump_time == 0 and actor.floor == point.floor and abs(actor.x - point.x) <= distance
 
     def _update_doors(self, dt: float):
         actors = [self.player]
@@ -392,24 +423,35 @@ class World:
         left, right = sorted((first.x, second.x))
         return not any(left < wall < right for wall in self._barriers(first.floor))
 
-    def _attack(self):
+    def _attack(self, kind='slash'):
         weapon = WEAPONS[self.weapon_index]
+        self.attack_kind = kind
+        self.attack_duration = 0.28 if kind == 'slash' else 0.24
         self.attack_cooldown = weapon.cooldown
-        self.attack_flash = 0.14
+        self.attack_flash = self.attack_duration
+        self.attack_hit_pending = True
+
+    def _apply_attack(self):
+        weapon = WEAPONS[self.weapon_index]
+        reach = round(weapon.reach * (0.8 if self.attack_kind == 'slash' else 1.3))
+        damage = weapon.damage + (1 if self.attack_kind == 'slash' else 0)
         for enemy in self.enemies:
             offset = enemy.actor.x - self.player.x
-            if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, weapon.reach):
+            if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, reach):
                 continue
             if enemy.health is None:
                 self.notify('이 적은 분신으로 유인하거나 우회하세요.')
             else:
-                enemy.health = max(0, enemy.health - weapon.damage)
+                enemy.health = max(0, enemy.health - damage)
                 enemy.flash = 0.19
+        boss_defeated = any(enemy.health == 0 and enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies)
         self.enemies = [enemy for enemy in self.enemies if enemy.health != 0]
+        if boss_defeated:
+            self.notify('보스를 처치했습니다! 출구로 이동하세요.')
 
     def _update_enemy(self, enemy: Enemy):
         kind = ENEMY_KINDS[enemy.spawn.kind]
-        sight = 600 if self.stage.isolation and enemy.spawn.kind == 'beast' else kind.sight
+        sight = kind.sight
         actor = enemy.actor
         actor.moving = False
         enemy.flash = max(0, enemy.flash - STEP)

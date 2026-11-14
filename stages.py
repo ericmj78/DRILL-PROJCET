@@ -107,7 +107,16 @@ ENEMY_KINDS = {
     'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, None, 105),
     'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 2, 86),
     'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 2, 100),
+    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 55, 12, 155),
+    'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 2, 76),
+    'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 3, 85),
+    'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 4, 115),
+    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, None, 115),
+    'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 4, 112),
+    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 12, 150),
 }
+
+BOSS_KINDS = frozenset(('jailer_boss', 'grand_witch'))
 
 
 @dataclass(frozen=True)
@@ -177,6 +186,7 @@ STAGES = (
             EnemySpawn('watcher', Point(976, 2), (950, 1004)),
             EnemySpawn('warden', Point(1450, 2), (1450, 1450)),
             EnemySpawn('crawler', Point(1680, 2), (1580, 1780)),
+            EnemySpawn('jailer_boss', Point(1980, 2), (1910, 2040)),
         ),
         guard=Point(1450, 2),
     ),
@@ -185,6 +195,12 @@ STAGES = (
         'A 문을 지난 뒤 분신이 1→2→3 감지 지점을 지나도록 녹화하세요.',
         1, Point(340, 0), Point(2100, 0),
         gates=(Gate('A', Point(160, 0), Point(900, 0)),),
+        enemies=(
+            EnemySpawn('magic_book', Point(700, 0), (620, 780)),
+            EnemySpawn('potion_slime', Point(1120, 0), (1060, 1200)),
+            EnemySpawn('magic_armor', Point(1380, 0), (1320, 1440)),
+            EnemySpawn('witch', Point(2000, 0), (1940, 2060)),
+        ),
         sequence=SequenceGate((Point(1300, 0), Point(1460, 0), Point(1620, 0)), Point(1850, 0)),
     ),
     Stage(
@@ -194,8 +210,11 @@ STAGES = (
         stairs=(Stair(2030, 0), Stair(1350, 0)),
         gates=(Gate('A', Point(1910, 0), Point(1420, 1)),),
         enemies=(
-            EnemySpawn('crawler', Point(650, 1), (550, 750)),
-            EnemySpawn('beast', Point(1250, 0), (1200, 1280)),
+            EnemySpawn('magic_armor', Point(650, 1), (550, 750)),
+            EnemySpawn('magic_armor_guard', Point(1250, 0), (1200, 1280)),
+            EnemySpawn('magic_book', Point(1750, 1), (1680, 1810)),
+            EnemySpawn('potion_slime', Point(350, 1), (290, 410)),
+            EnemySpawn('witch', Point(900, 0), (830, 970)),
         ),
         isolation=IsolationRoom(Point(1500, 0), Point(1320, 1), Point(1000, 1), 1540),
     ),
@@ -205,8 +224,10 @@ STAGES = (
         2, Point(310, 0), Point(2100, 0),
         stairs=(Stair(320, 0), Stair(680, 0), Stair(1250, 0), Stair(1850, 0)),
         enemies=(
-            EnemySpawn('beast', Point(520, 0), (460, 635)),
-            EnemySpawn('watcher', Point(1980, 0), (1900, 2070)),
+            EnemySpawn('witch', Point(1980, 0), (1900, 2070)),
+            EnemySpawn('magic_armor', Point(1000, 0), (930, 1070)),
+            EnemySpawn('magic_book', Point(1000, 1), (930, 1070)),
+            EnemySpawn('potion_slime', Point(350, 1), (280, 420)),
         ),
         walls=(Point(1800, 0),),
         bridge=EchoBridge((Point(1450, 1), Point(1520, 1), Point(1590, 1)), 0),
@@ -218,8 +239,11 @@ STAGES = (
         stairs=(Stair(145, 0),),
         gates=(Gate('A', Point(440, 1), Point(800, 0)),),
         enemies=(
-            EnemySpawn('beast', Point(820, 1), (760, 890)),
-            EnemySpawn('crawler', Point(1650, 1), (1550, 1750)),
+            EnemySpawn('potion_slime', Point(1650, 1), (1550, 1750)),
+            EnemySpawn('grand_witch', Point(1970, 1), (1900, 2040)),
+            EnemySpawn('magic_book', Point(400, 0), (340, 460)),
+            EnemySpawn('magic_armor', Point(1030, 0), (970, 1090)),
+            EnemySpawn('witch', Point(1160, 1), (1100, 1220)),
         ),
         lift=BalanceLift(Point(1450, 0), Point(1300, 0)),
     ),
