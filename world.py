@@ -2,12 +2,14 @@ from dataclasses import dataclass, field
 
 from stages import (
     ACTOR_RADIUS, BOSS_KINDS, DOOR_GRACE, ENEMY_KINDS,
-    GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MAX_RECORD_SECONDS, MOVE_SPEED,
+    GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MOVE_SPEED,
     PLATE_RANGE, RIGHT, STAIR_RANGE, STAGES, STEP, WEAPONS, EnemySpawn, Point,
 )
 
 JUMP_DURATION = 0.64
 JUMP_HEIGHT = 42
+ELEVATOR_DURATION = 0.8
+ENEMY_CHASE_MARGIN = 400
 
 
 @dataclass
@@ -18,6 +20,14 @@ class Actor:
     moving: bool = False
     walk_distance: float = 0
     jump_time: float = 0.0
+    elevator_target: int | None = None
+    elevator_time: float = 0.0
+
+    @property
+    def elevator_offset(self):
+        if self.elevator_target is None:
+            return 0.0
+        return (self.elevator_target - self.floor) * min(1.0, self.elevator_time / ELEVATOR_DURATION)
 
     @property
     def jump_height(self):
@@ -149,6 +159,9 @@ class World:
     def toggle_recording(self):
         if self.result != 'playing':
             return
+        if self.recording is None and self.player.elevator_target is not None:
+            self.notify('승강기가 멈춘 뒤 분신 녹화를 시작하세요.')
+            return
         if self.recording is None and self.player.jump_time > 0:
             self.notify('착지한 뒤 분신 녹화를 시작하세요.')
             return
@@ -186,7 +199,7 @@ class World:
         if self.recording is not None:
             self._move(self.recording.preview, motion)
             self.recording.inputs.append(motion)
-            if len(self.recording.inputs) >= round(MAX_RECORD_SECONDS / STEP):
+            if len(self.recording.inputs) >= round(self.stage.echo_seconds / STEP):
                 self._finish_recording(time_limit=True)
             return
 
@@ -201,14 +214,20 @@ class World:
         player_x, player_floor = self.player.x, self.player.floor
         if not self.lift_riding:
             self._move(self.player, motion)
+            self._block_body(player_x, player_floor)
         for hazard in self.stage.hidden_hazards:
-            if self._near(self.player, hazard, 18) and self.invulnerable == 0:
-                self.health -= 1
-                self.invulnerable = 0.92
-                self.notify('숨겨진 함정입니다! 분신으로 앞길을 살펴보세요.')
-                if self.health <= 0:
-                    self.result = 'defeated'
-                    return
+            # 분신의 빛이 닿지 않은 함정은 뛰어넘을 수도 없다. 무작정 점프로는 통과하지 못한다.
+            airborne = self.player.jump_time > 0 and self.hazard_lit(hazard)
+            if not airborne and self.player.floor == hazard.floor and abs(self.player.x - hazard.x) <= 18:
+                # 맞으면서 밀고 지나갈 수 없도록 온 방향으로 튕겨 낸다. 점프로만 넘는다.
+                self._move_x(self.player, 70 if player_x > hazard.x else -70)
+                if self.invulnerable == 0:
+                    self.health -= 1
+                    self.invulnerable = 0.92
+                    self.notify('숨겨진 함정입니다! 분신 곁에서 위치를 보고 뛰어넘으세요.')
+                    if self.health <= 0:
+                        self.result = 'defeated'
+                        return
         if attack and self.attack_cooldown == 0:
             self._attack(attack if isinstance(attack, str) else 'slash')
 
@@ -246,6 +265,22 @@ class World:
             else:
                 self.result = 'cleared'
 
+    def hazard_lit(self, hazard: Point) -> bool:
+        return (self.echo is not None and self.echo.actor.floor == hazard.floor
+                and abs(self.echo.actor.x - hazard.x) <= 120)
+
+    def _block_body(self, x: float, floor: int):
+        # 처치 불가 적은 본체가 몸으로 지나갈 수 없다. 분신으로 유인하거나 다른 층으로 돌아간다.
+        if self.index == 2 or self.player.floor != floor:
+            return
+        for enemy in self.enemies:
+            if (enemy.health is None and enemy.spawn.point != self.stage.guard and enemy.actor.floor == floor
+                    and (x - enemy.actor.x) * (self.player.x - enemy.actor.x) < 0):
+                self.player.x = x
+                self.player.moving = False
+                if self.message_time <= 0:
+                    self.notify('이 적은 지나갈 수 없습니다. 분신으로 유인하거나 돌아가세요.')
+
     def _barriers(self, floor: int):
         if self.stage.bridge:
             for point, remaining in zip(self.stage.bridge.points, self.bridge_timers):
@@ -259,7 +294,7 @@ class World:
                 yield room.exit_gate.x
         if self.stage.watch_gate and self.stage.watch_gate.door.floor == floor and not self.watch_active:
             yield self.stage.watch_gate.door.x
-        if self.stage.guard and self.stage.guard.floor == floor and self.guard_open_time == 0:
+        if self.index != 2 and self.stage.guard and self.stage.guard.floor == floor and self.guard_open_time == 0:
             yield self.stage.guard.x
         if self.stage.sync_gate and not self.sync_unlocked and self.stage.sync_gate.door.floor == floor:
             yield self.stage.sync_gate.door.x
@@ -287,6 +322,14 @@ class World:
         actor.walk_distance += distance
 
     def _move(self, actor: Actor, motion: Motion):
+        if actor.elevator_target is not None:
+            actor.moving = False
+            actor.elevator_time += STEP
+            if actor.elevator_time >= ELEVATOR_DURATION:
+                actor.floor = actor.elevator_target
+                actor.elevator_target = None
+                actor.elevator_time = 0.0
+            return
         if motion.horizontal:
             actor.facing = motion.horizontal
         if motion.jump and actor.jump_time == 0 and not motion.stairs:
@@ -298,6 +341,13 @@ class World:
         self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
         if motion.stairs and actor.jump_time == 0:
             lower = actor.floor if motion.stairs > 0 else actor.floor - 1
+            for elevator in self.stage.elevators:
+                if elevator.lower == lower and abs(elevator.x - actor.x) <= STAIR_RANGE:
+                    actor.x = elevator.x
+                    actor.elevator_target = actor.floor + motion.stairs
+                    actor.elevator_time = 0.0
+                    actor.moving = False
+                    return
             for stair in self.stage.stairs:
                 if stair.lower == lower and abs(stair.x - actor.x) <= STAIR_RANGE:
                     actor.x = stair.x
@@ -306,7 +356,7 @@ class World:
 
     @staticmethod
     def _near(actor: Actor, point: Point, distance: float) -> bool:
-        return actor.jump_time == 0 and actor.floor == point.floor and abs(actor.x - point.x) <= distance
+        return actor.elevator_target is None and actor.jump_time == 0 and actor.floor == point.floor and abs(actor.x - point.x) <= distance
 
     def _update_doors(self, dt: float):
         actors = [self.player]
@@ -344,7 +394,8 @@ class World:
         if sequence is None or self.sequence_unlocked or self.echo is None:
             return
         actor = self.echo.actor
-        if actor.floor != previous_floor or actor.x == previous_x:
+        # 공중에서는 감지 지점을 밟지 않는다. 점프로 순서를 건너뛸 수 있다.
+        if actor.floor != previous_floor or actor.x == previous_x or actor.jump_time > 0:
             return
         for index, sensor in enumerate(sequence.sensors):
             if sensor.floor != actor.floor:
@@ -418,6 +469,8 @@ class World:
             self.notify('분신이 사라져 발판이 내려왔습니다.')
 
     def _clear_line(self, first: Actor, second: Actor, distance: float) -> bool:
+        if first.elevator_target is not None or second.elevator_target is not None:
+            return False
         if first.floor != second.floor or abs(first.x - second.x) > distance:
             return False
         left, right = sorted((first.x, second.x))
@@ -456,9 +509,17 @@ class World:
         actor.moving = False
         enemy.flash = max(0, enemy.flash - STEP)
         enemy.recovery = max(0, enemy.recovery - STEP)
+        left, right = enemy.spawn.patrol
+
+        def within_chase_area(target):
+            return left - ENEMY_CHASE_MARGIN <= target.x <= right + ENEMY_CHASE_MARGIN
 
         if enemy.target is not None:
-            if self._clear_line(actor, enemy.target, sight):
+            if abs(actor.x - enemy.target.x) > sight + 100 or not within_chase_area(enemy.target):
+                enemy.target = None
+                enemy.windup = 0
+                enemy.unseen = 0
+            elif self._clear_line(actor, enemy.target, sight):
                 enemy.last_seen = enemy.target.x
                 enemy.unseen = 0
             else:
@@ -470,7 +531,7 @@ class World:
         if enemy.target is None:
             visible_echo = self.echo.actor if self.echo is not None else None
             for candidate in (self.player, visible_echo):
-                if candidate is not None and self._clear_line(actor, candidate, sight):
+                if candidate is not None and within_chase_area(candidate) and self._clear_line(actor, candidate, sight):
                     enemy.target = candidate
                     enemy.last_seen = candidate.x
                     enemy.unseen = 0
@@ -488,11 +549,11 @@ class World:
                 enemy.windup = 0.31
                 actor.facing = approach_direction(actor.x, enemy.target.x) or actor.facing
                 return
-            if enemy.recovery == 0:
+            # 놓친 표적의 마지막 위치를 밟고 서지 않는다. 사다리로 내려온 본체와 겹치지 않게 한다.
+            if enemy.recovery == 0 and abs(actor.x - enemy.last_seen) > kind.attack_range:
                 self._walk_enemy(actor, enemy.last_seen, kind.speed)
             return
 
-        left, right = enemy.spawn.patrol
         destination = left if enemy.patrol_direction < 0 else right
         self._walk_enemy(actor, destination, kind.speed * 0.46)
         if abs(actor.x - destination) < 1 or not actor.moving:
@@ -517,6 +578,6 @@ class World:
                 self.notify('피격! 필요하면 R로 스테이지를 다시 시작하세요.')
         elif self.echo is not None and target is self.echo.actor:
             if self.stage.guard and enemy.spawn.point == self.stage.guard:
-                self.guard_open_time = 1.1
+                self.guard_open_time = 4.0 if self.stage.elevators else 1.1
             self._remove_echo()
             self.notify('분신이 공격을 받아 사라졌습니다.')

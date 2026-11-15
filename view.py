@@ -10,8 +10,9 @@ from pico2d import draw_line, draw_rectangle, load_font, load_image
 from pico2d import pico2d as canvas
 
 from animation import AttackCycle, WalkCycle, draw_region
+from monster_attack import attack_pose, draw_attack_effect, draw_posed
 from monster_walk import MONSTER_GAITS, MonsterWalk
-from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, MAX_RECORD_SECONDS, RIGHT, STAGES, STEP, WEAPONS
+from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, RIGHT, STAGES, STEP, WEAPONS
 from world import JUMP_DURATION
 
 
@@ -36,6 +37,19 @@ GATE_FRAMES = ((322, 14, 384, 820), (1135, 14, 384, 820))
 EXIT_FRAME = (40, 34, 908, 1504)
 LADDER_FRAME = (263, 4, 361, 1766)
 LEVER_FRAMES = ((210, 132, 646, 535), (1324, 132, 646, 535))
+# Separate objects in the existing puzzle concept sheet (top-left image coordinates).
+PUZZLE_PROPS = {
+    'watch': (35, 36, 375, 390),
+    'guard': (477, 12, 346, 415),
+    'sensor': (875, 260, 405, 165),
+    'locked_gate': (1310, 0, 340, 425),
+    'lever': (1646, 265, 100, 156),
+    'bridge': (20, 576, 420, 225),
+    'hazard': (435, 608, 450, 222),
+    'sync': (895, 470, 350, 360),
+    'lift_platform': (1302, 681, 290, 100),
+    'lift_weight': (1505, 775, 245, 103),
+}
 WEAPON_SPRITES = {
     1: ((247, 111, 143, 461), 32, 0.81),
     2: ((335, 48, 355, 1450), 65, 0.84),
@@ -51,7 +65,9 @@ JUMP_FRAMES = (
 )
 # Keep the face aligned when cape and body widths change between jump poses.
 JUMP_FACE_X = (285, 715, 1145, 1595, 275, 708, 1150, 1560)
-JUMP_HEAD_LIFT = (0, 0, 0, 14, 3, -4, 0, 0)
+JUMP_HEAD_LIFT = (0, 10, 9, 21, 13, 4, 12, 0)
+# Frame 0 is a grounded take-off crouch. The jump leaves the floor on its first
+# step, so it starts from the standing pose (7) and frame 0 is intentionally unused.
 JUMP_POSE_ORDER = (7, 1, 2, 3, 4, 5, 6, 7)
 
 
@@ -94,6 +110,8 @@ class View:
             self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
         self.wizard_art = load_asset('wizard_castle/castle-dark.png')
         self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
+        self.prison_boss_arena = load_asset('map_sections/stage-03-boss-arena.png')
+        self.witch_boss_arena = load_asset('map_sections/stage-07-witch-boss-arena.png')
         self.wizard_book = load_asset('wizard_castle/book.png')
         self.wizard_fx = {}
         for name in ('rain', 'storm', 'potion'):
@@ -105,6 +123,7 @@ class View:
         self.exit_art = load_asset('dungeon_props/exit-portal.png')
         self.ladder_art = load_asset('dungeon_props/ladder.png')
         self.lever_art = load_asset('dungeon_props/lever.png')
+        self.puzzle_art = load_asset('puzzle_concepts/echo-puzzle-props-concept.png')
         self.weapon_art = load_asset('dungeon_props/weapon-atlas.png')
         self.hero_sword_art = load_asset('weapons/sword-slim.png')
         self.player = load_asset('player.png')
@@ -145,7 +164,8 @@ class View:
             ('magic_armor_guard', 'magic-armor'),
             ('witch', 'witch'), ('grand_witch', 'grand-witch-boss'),
         ):
-            sheet = load_asset(f'monster_concepts/{asset}-walk.png')
+            suffix = '-walk-transparent.png' if name == 'grand_witch' else '-walk.png'
+            sheet = load_asset(f'monster_concepts/{asset}{suffix}')
             width, height = sheet.w // 4, sheet.h // 2
             frames = [(column * width, row * height, width, height)
                       for row in range(2) for column in range(4)]
@@ -161,9 +181,40 @@ class View:
         if world is not self.current_world:
             self.current_world = world
             self.stage_started_at = perf_counter()
+            self.camera_y = 0.0
+            self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
         self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
-        if world.index in (1, 2):
+        if world.index in (2, 6):
+            now = perf_counter()
+            elapsed = min(0.1, max(0, now - self.camera_updated_at))
+            self.camera_updated_at = now
+            lift_offset = world.lift_progress if world.index == 6 and world.lift_riding and focus is world.player else 0
+            target = 400 * (focus.floor + focus.elevator_offset + lift_offset)
+            self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            self.floor_y = tuple(160 + floor * 400 - self.camera_y for floor in range(5))
+            if world.index == 2:
+                corridor = self.stage_art[1][0]
+                for floor in range(4):
+                    floor_y = self.floor_y[floor]
+                    bottom = floor_y - (corridor.h - 773) * 400 / corridor.h
+                    draw_region(corridor, (0, 0, corridor.w, corridor.h),
+                                -self.camera_x, bottom, WIDTH * 2, 400)
+                arena = self.prison_boss_arena
+            else:
+                corridor = self.wizard_art
+                source_top = 330
+                source_height = corridor.h - source_top
+                for floor in range(4):
+                    bottom = self.floor_y[floor] - (corridor.h - 675) * 400 / source_height
+                    draw_region(corridor, (0, source_top, corridor.w, source_height),
+                                -self.camera_x, bottom, WIDTH * 2, 400)
+                arena = self.witch_boss_arena
+            draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
+                        self.floor_y[4] - 95, WIDTH * 2, 560)
+            if world.index == 6:
+                self._draw_wizard_tower_effects(world.time)
+        elif world.index == 1:
             # Stack the same prison corridor for each playable floor.
             image, _ = self.stage_art[1]
             floor_y = []
@@ -252,6 +303,35 @@ class View:
         self._wizard_fx_frame('potion', int(time * 8), 380 * sx - self.camera_x,
                               105 + (self.wizard_art.h - 600) * sy, 48, 62)
 
+    def _draw_puzzle_prop(self, name, x, y, width, height, active=True):
+        tint = (255, 255, 255) if active else (120, 120, 135)
+        canvas.SDL_SetTextureColorMod(self.puzzle_art.texture, *tint)
+        draw_region(self.puzzle_art, PUZZLE_PROPS[name], x - width / 2, y, width, height)
+        canvas.SDL_SetTextureColorMod(self.puzzle_art.texture, 255, 255, 255)
+
+    def _draw_wizard_tower_effects(self, time):
+        sx = WIDTH * 2 / self.wizard_art.w
+        scale_y = 400 / (self.wizard_art.h - 330)
+        for floor in range(4):
+            y = self.floor_y[floor] + (675 - 570) * scale_y
+            for x0, x1 in ((715, 880), (950, 1110), (1180, 1340), (1405, 1555), (1610, 1765)):
+                x = x0 * sx - self.camera_x
+                width, height = (x1 - x0) * sx, 160 * scale_y
+                self._wizard_fx_frame('rain', int(time * 4), x, y, width, height, 115)
+                if 9.0 <= time % 18 < 9.5:
+                    self._wizard_fx_frame('storm', 12 + int((time % 18 - 9.0) * 4), x, y, width, height, 110)
+        # The arena image is a separate, full-height room; keep rain on its windows.
+        arena = self.witch_boss_arena
+        arena_y = self.floor_y[4] - 95
+        for x0, x1 in ((460, 700), (720, 950), (970, 1200), (1220, 1450), (1470, 1710)):
+            x = x0 * WIDTH * 2 / arena.w - self.camera_x
+            y = arena_y + (arena.h - 475) * 560 / arena.h
+            self._wizard_fx_frame('rain', int(time * 4), x, y,
+                                  (x1 - x0) * WIDTH * 2 / arena.w, 310 * 560 / arena.h, 90)
+            if 9.0 <= time % 18 < 9.5:
+                self._wizard_fx_frame('storm', 12 + int((time % 18 - 9.0) * 4), x, y,
+                                      (x1 - x0) * WIDTH * 2 / arena.w, 310 * 560 / arena.h, 90)
+
     def _draw_map(self, world):
         stage = world.stage
         for floor, y in enumerate(self.floor_y):
@@ -263,7 +343,7 @@ class View:
                 x = sensor.x - self.camera_x
                 y = self.floor_y[sensor.floor]
                 color = CYAN if index < world.sequence_progress else GOLD
-                box(x - 18, y, x + 18, y + 7, color)
+                self._draw_puzzle_prop('sensor', x, y - 3, 42, 17, index < world.sequence_progress)
                 self.small.draw(x - 4, y + 19, str(index + 1), color)
             x = stage.sequence.door.x - self.camera_x
             y = self.floor_y[stage.sequence.door.floor]
@@ -276,22 +356,24 @@ class View:
                                           (gate.echo_sensor, '분신', world.sync_echo_time)):
                 x, y = sensor.x - self.camera_x, self.floor_y[sensor.floor]
                 color = CYAN if active is not None or world.sync_unlocked else GOLD
+                self._draw_puzzle_prop('sync', x, y, 68, 72,
+                                       active is not None or world.sync_unlocked)
                 line(x, y, x, y + 70, color)
                 self.small.draw(x - 15, y + 82, label, color)
             x, y = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
             draw_grounded(self.gate_art, GATE_FRAMES[world.sync_unlocked], x, y, 112)
             self.small.draw(x - 30, y + 125, '동시 통과', CYAN if world.sync_unlocked else GOLD)
 
-        if world.echo is not None:
-            for hazard in stage.hidden_hazards:
-                if world.echo.actor.floor == hazard.floor and abs(world.echo.actor.x - hazard.x) <= 120:
-                    x, y = hazard.x - self.camera_x, self.floor_y[hazard.floor]
-                    box(x - 18, y, x + 18, y + 10, RED)
-                    self.small.draw(x - 15, y + 22, '함정', RED)
+        for hazard in stage.hidden_hazards:
+            if world.hazard_lit(hazard):
+                x, y = hazard.x - self.camera_x, self.floor_y[hazard.floor]
+                self._draw_puzzle_prop('hazard', x, y - 4, 45, 22)
+                self.small.draw(x - 15, y + 22, '함정', RED)
 
-        if stage.guard is not None:
+        if stage.guard is not None and world.index != 2:
             x, y = stage.guard.x - self.camera_x, self.floor_y[stage.guard.floor]
             color = CYAN if world.guard_open_time > 0 else RED
+            self._draw_puzzle_prop('guard', x, y + 32, 82, 100, world.guard_open_time > 0)
             self.small.draw(x - 40, y + 145, '지나가세요!' if world.guard_open_time > 0 else '수호자 방어', color)
 
         if stage.watch_gate is not None:
@@ -299,7 +381,7 @@ class View:
             x, y = gate.focus.x - self.camera_x, self.floor_y[gate.focus.floor]
             color = CYAN if world.watch_active else GOLD
             line(x - 65, y + 10, x + 65, y + 10, color)
-            box(x - 10, y + 82, x + 10, y + 96, color)
+            self._draw_puzzle_prop('watch', x, y + 34, 70, 70, world.watch_active)
             target_x = world.echo.actor.x - self.camera_x if world.watch_active else x + 50 * sin(world.time)
             line(x, y + 82, target_x, y + 35, color)
             self.small.draw(x - 35, y + 27, '감시 구역', color)
@@ -312,30 +394,50 @@ class View:
             for point, is_open, label in ((room.door, not world.isolation_closed, '격리실'),
                                           (room.exit_gate, world.isolation_closed, '보안문')):
                 x, y = point.x - self.camera_x, self.floor_y[point.floor]
-                draw_grounded(self.gate_art, GATE_FRAMES[is_open], x, y, 112)
+                if is_open:
+                    draw_grounded(self.gate_art, GATE_FRAMES[True], x, y, 112)
+                else:
+                    self._draw_puzzle_prop('locked_gate', x, y, 90, 112)
                 self.small.draw(x - 25, y + 125, label, CYAN if is_open else GOLD)
             x, y = room.lever.x - self.camera_x, self.floor_y[room.lever.floor]
-            draw_grounded(self.lever_art, LEVER_FRAMES[world.isolation_closed], x, y, 34)
+            self._draw_puzzle_prop('lever', x, y, 25, 39, world.isolation_closed)
             self.small.draw(x - 25, y + 45, 'E 격리', CYAN if world.isolation_closed else GOLD)
 
         if stage.bridge is not None:
             for point, remaining in zip(stage.bridge.points, world.bridge_timers):
                 x, y = point.x - self.camera_x, self.floor_y[point.floor]
-                box(x - 28, y - 4, x + 28, y + 7, CYAN if remaining > 0 else INK)
+                if remaining > 0:
+                    self._draw_puzzle_prop('bridge', x, y - 27, 62, 34)
+                else:
+                    box(x - 28, y - 4, x + 28, y + 7, INK)
                 self.small.draw(x - 22, y + 19, '발판' if remaining > 0 else '빈 길', CYAN if remaining > 0 else MUTED)
 
         if stage.lift is not None:
             lift = stage.lift
             x, y = lift.weight.x - self.camera_x, self.floor_y[lift.weight.floor]
             active = world.echo is not None and world._near(world.echo.actor, lift.weight, 22)
-            box(x - 25, y, x + 25, y + 8, CYAN if active else GOLD)
+            self._draw_puzzle_prop('lift_weight', x, y - 3, 56, 23, active)
             self.small.draw(x - 32, y + 20, '균형 발판', CYAN if active else GOLD)
             x = lift.platform.x - self.camera_x
             low = self.floor_y[lift.platform.floor]
             high = self.floor_y[lift.platform.floor + 1]
             y = low + (high - low) * world.lift_progress
-            box(x - 35, y - 5, x + 35, y + 5, CYAN)
+            self._draw_puzzle_prop('lift_platform', x, y - 19, 70, 24)
             self.small.draw(x - 22, y + 16, '승강', CYAN)
+
+        for elevator in stage.elevators:
+            x = elevator.x - self.camera_x
+            low, high = self.floor_y[elevator.lower], self.floor_y[elevator.lower + 1]
+            line(x - 27, low, x - 27, high + 75, GOLD)
+            line(x + 27, low, x + 27, high + 75, GOLD)
+            for floor, y, direction in ((elevator.lower, low, '↑'), (elevator.lower + 1, high, '↓')):
+                self._draw_puzzle_prop('lift_platform', x, y - 18, 70, 24)
+                self.small.draw(x - 22, y + 22, f'{direction} 승강', GOLD)
+            for actor in (world.player, world.echo.actor if world.echo else None,
+                          world.recording.preview if world.recording else None):
+                if actor and actor.elevator_target is not None and abs(actor.x - elevator.x) < 1 and min(actor.floor, actor.elevator_target) == elevator.lower:
+                    y = self._actor_floor_y(actor)
+                    self._draw_puzzle_prop('lift_platform', x, y - 18, 70, 24)
 
         for stair in stage.stairs:
             x = stair.x - self.camera_x
@@ -383,11 +485,22 @@ class View:
             x = screen_enemy.actor.x
             feet = 0.30 if enemy.spawn.kind in ('beast', 'crawler') else 0.47
             tint = (255, 166, 156) if enemy.flash > 0 else (255, 255, 255)
-            if enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
-                if enemy.windup > 0:
-                    screen_enemy.actor.x -= screen_enemy.actor.facing * 4 * (1 - enemy.windup / 0.31)
-                elif enemy.recovery > 0:
-                    screen_enemy.actor.x += screen_enemy.actor.facing * 10 * max(0, 1 - (0.65 - enemy.recovery) / 0.12)
+            pose = attack_pose(enemy.spawn.kind, enemy.windup, enemy.recovery)
+            if pose is not None:
+                # 공격 중에는 monster_attack.py의 자세 스크립트대로 그린다.
+                actor = screen_enemy.actor
+                walk = self.enemy_walk.get(enemy.spawn.kind)
+                if isinstance(walk, MonsterWalk):
+                    actor.x += actor.facing * pose.dx
+                    walk.draw(actor, y + pose.dy, faces=-1, tint=tint, lean=pose.angle)
+                elif walk is not None:
+                    frame = walk.frames[int(actor.walk_distance / walk.stride_per_frame) % len(walk.frames)]
+                    draw_posed(walk.image, frame, x, y, walk.draw_height, actor.facing, pose, tint)
+                else:
+                    image = self.enemies[enemy.spawn.kind]
+                    draw_posed(image, (0, 0, image.w, image.h), x, y, kind.size, actor.facing, pose, tint)
+                draw_attack_effect(enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
+            elif enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
             elif enemy.spawn.kind in ('magic_book', 'potion_slime'):
                 image = self.enemies[enemy.spawn.kind]
@@ -399,16 +512,6 @@ class View:
                 draw_region(image, (0, 0, image.w, image.h), x - width / 2, y + bob, width, height,
                             enemy.actor.facing != -1)
                 canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
-            elif enemy.windup > 0 or enemy.recovery > 0:
-                if enemy.windup > 0:
-                    windup = min(1, max(0, (0.31 - enemy.windup) / 0.31))
-                    recovery = None
-                else:
-                    windup = None
-                    recovery = min(1, max(0, 1 - enemy.recovery / 0.65))
-                self._draw_enemy_attack(
-                    screen_enemy, kind, y, feet, tint, windup=windup, recovery=recovery,
-                )
             elif enemy.actor.moving:
                 self.enemy_walk[enemy.spawn.kind].draw(
                     screen_enemy.actor, y, faces=-1, tint=tint,
@@ -435,7 +538,7 @@ class View:
             self.floor_y = tuple(floors)
         if world.attack_flash > 0:
             progress = 1 - world.attack_flash / world.attack_duration
-            floor = self.floor_y[world.player.floor] + world.player.jump_height
+            floor = self._actor_floor_y(world.player) + world.player.jump_height
             self.player_attack.draw(
                 player, floor, progress, opacity=player_alpha,
             )
@@ -458,7 +561,7 @@ class View:
         else:
             actor = player
             marker = 'YOU'
-        x, y = actor.x, self.floor_y[actor.floor] + actor.jump_height + 104
+        x, y = actor.x, self._actor_floor_y(actor) + actor.jump_height + 104
         color = CYAN if recording else WHITE
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
@@ -467,6 +570,13 @@ class View:
         screen_actor = copy(actor)
         screen_actor.x -= self.camera_x
         return screen_actor
+
+    def _actor_floor_y(self, actor):
+        if actor.elevator_target is None:
+            return self.floor_y[actor.floor]
+        start = self.floor_y[actor.floor]
+        end = self.floor_y[actor.elevator_target]
+        return start + (end - start) * abs(actor.elevator_offset)
 
     def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind):
         region, height, grip = WEAPON_SPRITES[index]
@@ -486,63 +596,53 @@ class View:
         )
         canvas.SDL_SetTextureAlphaMod(texture, 255)
 
-    def _draw_enemy_attack(self, enemy, kind, floor_y, feet, tint, windup=None, recovery=None):
-        walk = self.enemy_walk[enemy.spawn.kind]
-        if isinstance(walk, MonsterWalk):
-            walk.draw(
-                enemy.actor, floor_y, faces=-1, tint=tint,
-                windup=windup, recovery=recovery,
-            )
-            return
-
-        if windup is not None:
-            prep = windup * windup * (3 - 2 * windup)
-            lunge = 0
-        else:
-            prep = 0
-            release = min(1, recovery / 0.18)
-            lunge = 1 - release * release * (3 - 2 * release)
-
-        actor = enemy.actor
-        size = kind.size * (1 - 0.035 * prep + 0.055 * lunge)
-        x = actor.x + actor.facing * (-4 * prep + 14 * lunge)
-        y = floor_y + kind.size * feet + 2 * prep - 2 * lunge
-        angle = actor.facing * (0.12 * prep - 0.22 * lunge)
-        image = self.enemies[enemy.spawn.kind]
-        canvas.SDL_SetTextureColorMod(image.texture, *tint)
-        image.composite_draw(angle, 'h' if actor.facing != -1 else '', x, y, size, size)
-        canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
-
     def _avatar(self, idle, walk, actor, opacity=255):
         if actor.jump_time > 0:
-            phase = min(7, int(actor.jump_time * 8 / JUMP_DURATION))
-            index = JUMP_POSE_ORDER[phase]
-            region = JUMP_FRAMES[index]
-            scale = 91 / 406
-            width, height = region[2] * scale, region[3] * scale
-            face_offset = (JUMP_FACE_X[index] - region[0]) * scale - width / 2
-            face_alignment = (7 - face_offset) * actor.facing
-            texture = self.player_jump.texture
-            canvas.SDL_SetTextureAlphaMod(texture, opacity)
-            if idle is self.echo:
-                canvas.SDL_SetTextureColorMod(texture, 100, 220, 255)
-            draw_region(self.player_jump, region, actor.x - width / 2 + face_alignment,
-                        self.floor_y[actor.floor] + actor.jump_height + JUMP_HEAD_LIFT[index], width, height,
-                        actor.facing < 0)
-            canvas.SDL_SetTextureColorMod(texture, 255, 255, 255)
-            canvas.SDL_SetTextureAlphaMod(texture, 255)
+            progress = min(7.999, actor.jump_time * 8 / JUMP_DURATION)
+            phase = int(progress)
+            # Blend briefly into the next pose instead of abruptly replacing it.
+            blend = max(0.0, (progress - phase - 0.65) / 0.35) if phase < 7 else 0.0
+            self._draw_jump_pose(actor, JUMP_POSE_ORDER[phase], opacity, idle is self.echo)
+            if blend:
+                self._draw_jump_pose(actor, JUMP_POSE_ORDER[phase + 1], round(opacity * blend), idle is self.echo)
         elif actor.moving:
-            walk.draw(actor, self.floor_y[actor.floor], opacity)
+            walk.draw(actor, self._actor_floor_y(actor), opacity)
         else:
             breathing = sin(self.animation_time * 2.1) * 1.5
             self._sprite(idle, actor, 91 + breathing, 0, opacity=opacity)
+
+    def _draw_jump_pose(self, actor, index, opacity, is_echo):
+        region = JUMP_FRAMES[index]
+        scale = 91 / 406
+        width, height = region[2] * scale, region[3] * scale
+        face_offset = (JUMP_FACE_X[index] - region[0]) * scale - width / 2
+        face_alignment = (7 - face_offset) * actor.facing
+        left = actor.x - width / 2 + face_alignment
+        bottom = self._actor_floor_y(actor) + actor.jump_height + JUMP_HEAD_LIFT[index]
+        flip = actor.facing < 0
+        texture = self.player_jump.texture
+        canvas.SDL_SetTextureAlphaMod(texture, opacity)
+        if is_echo:
+            canvas.SDL_SetTextureColorMod(texture, 100, 220, 255)
+        draw_region(self.player_jump, region, left, bottom, width, height, flip)
+        if is_echo:
+            # The player's dark sprite cannot become bright cyan through color
+            # modulation alone; a cyan additive pass keeps the echo recognizable.
+            canvas.SDL_SetTextureBlendMode(texture, canvas.SDL_BLENDMODE_ADD)
+            canvas.SDL_SetTextureColorMod(texture, 0, 220, 255)
+            draw_region(self.player_jump, region, left, bottom, width, height, flip)
+            canvas.SDL_SetTextureBlendMode(texture, canvas.SDL_BLENDMODE_BLEND)
+        canvas.SDL_SetTextureColorMod(texture, 255, 255, 255)
+        canvas.SDL_SetTextureAlphaMod(texture, 255)
 
     def _sprite(self, image, actor, size, time, feet=0.49, faces=1, opacity=255, tint=(255, 255, 255)):
         bob = abs(sin(time * 21)) * 4 if actor.moving else 0
         canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
         canvas.SDL_SetTextureColorMod(image.texture, *tint)
         image.composite_draw(0, 'h' if actor.facing != faces else '', actor.x,
-                             self.floor_y[actor.floor] + size * feet + bob, size, size)
+                             self._actor_floor_y(actor) + size * feet + bob, size, size)
+        canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+        canvas.SDL_SetTextureAlphaMod(image.texture, 255)
 
     def _draw_hud(self, world):
         box(0, 625, WIDTH, HEIGHT, INK)
@@ -558,8 +658,9 @@ class View:
         self.small.draw(557, 653, WEAPONS[world.weapon_index].name, GOLD)
         if world.recording is not None:
             seconds = len(world.recording.inputs) * STEP
-            value = seconds / MAX_RECORD_SECONDS
-            status = f'{seconds:04.1f} / {MAX_RECORD_SECONDS:.0f}초'
+            limit = world.stage.echo_seconds
+            value = seconds / limit
+            status = f'{seconds:04.1f} / {limit:g}초'
         elif world.echo is not None:
             remaining = len(world.echo.inputs) - world.echo.cursor
             value = remaining / len(world.echo.inputs)
@@ -574,8 +675,31 @@ class View:
 
         box(0, 0, WIDTH, 104, INK)
         line(28, 103, WIDTH - 28, 103, LINE)
-        self.small.draw(33, 78, world.stage.hint, WHITE)
-        self.small.draw(33, 45, '← → 이동   Space 점프   ↑ ↓ 사다리   C 녹화   A 베기   S 찌르기   E 레버   0–4 무기   Backspace 취소   R 재시작   Esc 종료', MUTED)
+        hint = world.stage.hint
+        if world.index == 2:
+            floor = world.player.floor
+            if floor == 0:
+                hint = '1층: 분신으로 A 발판을 누른 뒤 왼쪽 승강기를 타세요.'
+            elif floor == 1:
+                hint = '2층: 본체는 C 발판에 서고 분신은 B로 보내세요. 그 뒤 가운데 승강기에서 ↑를 누르세요.'
+            elif floor == 2:
+                hint = '3층: 수호자의 공격을 피하며 오른쪽 끝 승강기를 타세요.'
+            elif floor == 3:
+                hint = '4층: 몬스터를 지나 왼쪽 끝 승강기에서 ↑를 눌러 보스방으로 가세요.'
+            else:
+                hint = '5층: 오른쪽의 쇠사슬 간수를 처치하고 출구로 가세요.'
+        if world.index == 6:
+            hints = (
+                '1층: 분신을 A 발판으로 보낸 뒤 C 발판과 균형 발판을 이용하세요.',
+                '2층: 왼쪽 승강기에서 ↑를 눌러 3층으로 가세요.',
+                '3층: 오른쪽 승강기에서 ↑를 눌러 4층으로 가세요.',
+                '4층: 왼쪽 승강기에서 ↑를 눌러 대마녀의 방으로 가세요.',
+                '5층: 대마녀를 처치한 뒤 오른쪽 출구로 가세요.',
+            )
+            hint = hints[world.player.floor]
+        self.small.draw(33, 78, hint, WHITE)
+        vertical_control = '사다리·승강기' if world.stage.stairs and world.stage.elevators else '승강기' if world.stage.elevators else '사다리'
+        self.small.draw(33, 45, f'← → 이동   Space 점프   ↑ ↓ {vertical_control}   C 녹화   A 베기   S 찌르기   E 레버   0–4 무기   Backspace 취소   R 재시작   Esc 종료', MUTED)
         if world.message_time > 0:
             self.small.draw(33, 18, world.message, GOLD)
         else:

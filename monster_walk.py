@@ -120,29 +120,21 @@ class MonsterWalk:
         self.image = image
         self.gait = gait
 
-    def draw(self, actor, floor_y, faces=-1, tint=(255, 255, 255), windup=None, recovery=None):
+    def draw(self, actor, floor_y, faces=-1, tint=(255, 255, 255), lean=None):
+        """lean은 공격 중 몸통을 앞으로 숙이는 각도(도)다. 주면 다리는 디딘 채로 멈춘다."""
         gait = self.gait
         phase = (actor.walk_distance / gait.cycle_distance) % 1
         weight = 4 * pi * (phase - 0.055)
         hip_y = gait.hip_height + gait.bob * (1 - cos(weight)) / 2
         pitch = radians(gait.rock) * sin(weight)
-        forward = 0
-        attacking = windup is not None or recovery is not None
-        if windup is not None:
-            prep = windup * windup * (3 - 2 * windup)
-            forward = -5.5 * prep
-            hip_y -= 2.5 * prep
-            pitch += radians(gait.rock * 1.4) * prep
-        elif recovery is not None:
-            release = min(1, recovery / 0.20)
-            lunge = 1 - release * release * (3 - 2 * release)
-            forward = 8 * lunge
-            hip_y -= 2.5 * lunge
-            pitch -= radians(gait.rock * 1.8) * lunge
+        attacking = lean is not None
+        if attacking:
+            pitch -= radians(lean)
+            hip_y -= abs(lean) * 0.12
         body_pose = (hip_y, pitch)
         flip = actor.facing != faces
         texture = self.image.texture
-        actor_x = actor.x + actor.facing * forward
+        actor_x = actor.x
 
         canvas.SDL_SetTextureColorMod(texture, *(round(channel * 0.67) for channel in tint))
         self._draw_legs(gait.far_legs, phase, body_pose, 2, actor_x, floor_y, flip, attacking)
