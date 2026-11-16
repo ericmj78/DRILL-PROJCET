@@ -367,14 +367,14 @@ def stage_9(b):
     b.rec()
     b.go(670)
     b.up()
-    b.until(lambda w: enemy(w, 'beast').x > 1050)  # 짐승이 B 발판에서 가장 멀 때
+    b.until(lambda w: enemy(w, 'broken_jester').x > 1050)  # 광대가 B 발판에서 멀 때
     b.rec()
     b.down()
     b.go(820)
     b.wait(1.5)
     b.rec()
     b.go(1060)
-    b.kill('time_thief')
+    b.kill('cursed_lantern')
     b.go(1300)
     b.up()
     b.rec()
@@ -432,8 +432,9 @@ def check_balance():
     late = World(8)                                     # 후반 강화 ×1.6
     thief = next(e for e in late.enemies if e.spawn.kind == 'time_thief')
     assert (thief.health, late.enemy_damage(thief)) == (32, 11)
-    beast = next(e for e in late.enemies if e.spawn.kind == 'beast')
-    assert late.enemy_damage(beast) == 10                # 25의 40%
+    early = World(1)
+    beast = next(e for e in early.enemies if e.spawn.kind == 'beast')
+    assert early.enemy_damage(beast) == 10               # 25의 40%
     late.hurt(99, '테스트')
     assert (late.health, late.result) == (0, 'defeated')
 
@@ -451,9 +452,17 @@ def check_boss_warp():
         assert w.result == 'playing' and w.health == w.max_health, stage.title
 
 
+def check_late_stage_monsters():
+    allowed = {'time_thief', 'cursed_lantern', 'broken_jester'}
+    for stage in STAGES[6:9]:
+        kinds = {spawn.kind for spawn in stage.enemies} - BOSS_KINDS
+        assert kinds and kinds <= allowed, (stage.title, kinds)
+
+
 def main():
     check_balance()
     check_boss_warp()
+    check_late_stage_monsters()
     print('OK   밸런스 표')
     failed = False
     for index, stage in enumerate(STAGES):

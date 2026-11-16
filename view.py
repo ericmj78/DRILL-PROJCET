@@ -143,6 +143,8 @@ class View:
             self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
         self.wizard_art = load_asset('wizard_castle/castle-dark.png')
         self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
+        self.late_three_floor_art = load_asset('map_sections/echo-knight-approach-three-floors-concept.png')
+        self.echo_boss_arena = load_asset('map_sections/echo-knight-arena-concept.png')
         self.prison_boss_arena = load_asset('map_sections/stage-03-boss-arena.png')
         self.witch_boss_arena = load_asset('map_sections/stage-07-witch-boss-arena.png')
         self.wizard_book = load_asset('wizard_castle/book.png')
@@ -239,7 +241,7 @@ class View:
             self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
         self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
-        if world.index in (0, 1, 3, 4, 8):
+        if world.index in (0, 1, 3, 4):
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
@@ -248,7 +250,7 @@ class View:
             self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y
                                  for floor in range(world.stage.floors))
-            if world.index in (0, 1, 8):
+            if world.index in (0, 1):
                 corridor = self.stage_art[1][0]
                 for floor_y in self.floor_y:
                     bottom = floor_y - (corridor.h - 773) * 400 / corridor.h
@@ -263,6 +265,30 @@ class View:
                     draw_region(corridor, (0, source_top, corridor.w, source_height),
                                 -self.camera_x, bottom, WIDTH * 2, 400)
                 self._draw_wizard_tower_effects(world.time)
+        elif world.index == 8:
+            # 세 층을 하나의 이미지로 그려 층 사이 배경이 끊기지 않는다.
+            now = perf_counter()
+            elapsed = min(0.1, max(0, now - self.camera_updated_at))
+            self.camera_updated_at = now
+            image = self.late_three_floor_art
+            scale_y = 400 / 231
+            levels = (0, (690 - 455) * scale_y, (690 - 228) * scale_y,
+                      (690 - 228) * scale_y + 400)
+            floor = focus.floor
+            offset = focus.elevator_offset
+            target = levels[floor]
+            if offset > 0 and floor + 1 < len(levels):
+                target += offset * (levels[floor + 1] - levels[floor])
+            elif offset < 0 and floor > 0:
+                target += offset * (levels[floor] - levels[floor - 1])
+            self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            self.floor_y = tuple(160 + level - self.camera_y for level in levels)
+            bottom = self.floor_y[0] - (image.h - 690) * scale_y
+            draw_region(image, (0, 0, image.w, image.h), -self.camera_x,
+                        bottom, WIDTH * 2, image.h * scale_y)
+            arena = self.echo_boss_arena
+            draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
+                        self.floor_y[3] - 95, WIDTH * 2, 560)
         elif world.index in (2, 5):
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
@@ -315,9 +341,16 @@ class View:
                         -self.camera_x, 105, WIDTH * 2, 520)
             self._draw_wizard_effects(world.time, single_floor)
         elif world.index == 6:
-            image = self.late_two_floor_art
+            image = self.late_three_floor_art
+            source_height = 480
+            self.floor_y = tuple(105 + round((source_height - row) * 520 / source_height)
+                                 for row in (455, 228))
+            draw_region(image, (0, 0, image.w, source_height),
+                        -self.camera_x, 105, WIDTH * 2, 520)
+        elif world.index == 7:
+            image = self.late_three_floor_art
             self.floor_y = tuple(105 + round((image.h - row) * 520 / image.h)
-                                 for row in (635, 333))
+                                 for row in (690, 455, 228))
             draw_region(image, (0, 0, image.w, image.h),
                         -self.camera_x, 105, WIDTH * 2, 520)
         else:
@@ -450,11 +483,11 @@ class View:
                 self._draw_puzzle_prop('hazard', x, y - 4, 45, 22)
                 self.small.draw(x - 15, y + 22, '함정', RED)
 
-        if stage.guard is not None and world.index != 2:
+        if (stage.guard is not None and world.index != 2
+                and any(enemy.spawn.point == stage.guard for enemy in world.enemies)):
             x, y = stage.guard.x - self.camera_x, self.floor_y[stage.guard.floor]
             color = CYAN if world.guard_open_time > 0 else RED
-            self._draw_puzzle_prop('guard', x, y + 32, 82, 100, world.guard_open_time > 0)
-            self.small.draw(x - 40, y + 145, '지나가세요!' if world.guard_open_time > 0 else '수호자 방어', color)
+            self.small.draw(x - 40, y + 180, '지나가세요!' if world.guard_open_time > 0 else '경비 구간', color)
 
         if stage.watch_gate is not None:
             gate = stage.watch_gate

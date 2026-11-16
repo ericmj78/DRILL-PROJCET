@@ -321,9 +321,9 @@ STAGES = (
             Gate('B', Point(820, 0), Point(1000, 1)),
         ),
         enemies=(
-            EnemySpawn('beast', Point(1008, 0), (948, 1060)),
-            EnemySpawn('time_thief', Point(1180, 1), (1100, 1250)),
-            EnemySpawn('warden', Point(1500, 2), (1500, 1500)),
+            EnemySpawn('broken_jester', Point(1008, 0), (948, 1060)),
+            EnemySpawn('cursed_lantern', Point(1180, 1), (1100, 1250)),
+            EnemySpawn('time_thief', Point(1500, 2), (1500, 1500)),
             EnemySpawn('echo_knight', Point(1120, 3), (1050, 1190)),
         ),
         hidden_hazards=(Point(1700, 2), Point(1900, 2)),
