@@ -1,13 +1,16 @@
 """몬스터 공격 모션 스크립트.
 
-몬스터마다 준비 자세(windup)와 타격 자세(strike) 두 개만 적어 두면, 준비 → 타격 → 복귀를
-시간에 따라 이어 준다. 새 그림 없이 기존 스프라이트를 밀고, 눌렀다 늘이고, 기울여서 만든다.
-수치를 바꾸려면 아래 ATTACKS 표만 고치면 된다.
+몬스터마다 준비 자세(windup)와 타격 자세(strike), 타격 이펙트(fx)를 적어 두면
+준비 → 타격 → 복귀를 시간에 따라 이어 준다. 자세는 기존 스프라이트를 밀고, 눌렀다 늘이고,
+기울여서 만든다. 이펙트는 pixelfx(https://github.com/patch-gg/pixelfx)로 뽑은
+assets/attack_fx의 스프라이트 시트다. 수치를 바꾸려면 아래 ATTACKS 표만 고치면 된다.
 """
+import json
 from dataclasses import dataclass
-from math import cos, pi, radians, sin
+from math import pi, sin
+from pathlib import Path
 
-from pico2d import draw_rectangle
+from pico2d import load_image
 from pico2d import pico2d as canvas
 
 WINDUP, RECOVERY = 0.31, 0.65  # world.py에서 적이 공격을 준비하고 회복하는 시간과 같아야 한다.
@@ -25,38 +28,56 @@ class Pose:
 
 
 @dataclass(frozen=True)
+class Fx:
+    sheet: str         # assets/attack_fx의 시트 이름
+    start: float       # 준비가 시작될 때 이펙트의 재생 위치(초)
+    hit: float         # 타격 순간에 맞출 이펙트의 재생 위치(초)
+    forward: float     # 몬스터 발밑에서 이펙트 기준점까지 앞쪽 거리
+    lift: float = 0    # 기준점의 바닥 위 높이
+    scale: float = 1
+    hold: float = RECOVERY  # 타격 뒤에 이펙트를 보여 주는 시간
+
+
+@dataclass(frozen=True)
 class Attack:
     windup: Pose
     strike: Pose
-    effect: str                      # 'slash' 베기, 'slam' 내려찍기, 'bolt' 마법탄, 'charge' 돌진
-    color: tuple[int, int, int]
-    reach: float                     # 이펙트가 닿는 거리
-    height: float                    # 이펙트가 나오는 높이
-    hop: float = 0                   # 타격 순간 뛰어오르는 높이
+    fx: Fx
+    hop: float = 0     # 타격 순간 뛰어오르는 높이
 
 
 REST = Pose()
 ATTACKS = {
-    'beast': Attack(Pose(-14, 0, 1.06, 0.90, -9), Pose(30, 0, 1.12, 0.94, 13),
-                    'charge', (255, 214, 150), 50, 26),
-    'warden': Attack(Pose(-7, 0, 0.96, 1.08, -15), Pose(15, 0, 1.10, 0.90, 19),
-                     'slam', (196, 206, 222), 54, 0),
-    'watcher': Attack(Pose(-12, 9, 0.88, 0.88, -12), Pose(20, 0, 1.14, 1.00, 12),
-                      'bolt', (203, 145, 238), 46, 46),
-    'crawler': Attack(Pose(-9, 0, 1.12, 0.80, -6), Pose(26, 0, 1.10, 0.90, 10),
-                      'slash', (196, 128, 226), 42, 22, hop=16),
-    'jailer_boss': Attack(Pose(-16, 4, 1.00, 1.07, -17), Pose(26, 0, 1.10, 0.93, 18),
-                          'slash', (255, 190, 120), 66, 62),
-    'magic_book': Attack(Pose(-9, 10, 0.84, 1.20, -14), Pose(22, 0, 1.26, 0.84, 10),
-                         'bolt', (120, 200, 255), 44, 34),
-    'potion_slime': Attack(Pose(0, 0, 1.32, 0.60, 0), Pose(20, 0, 0.80, 1.30, 6),
-                           'slam', (124, 232, 146), 40, 0, hop=22),
-    'magic_armor': Attack(Pose(-11, 2, 1.00, 1.05, -13), Pose(23, 0, 1.08, 0.96, 14),
-                          'slash', (204, 228, 255), 54, 52),
+    # 뿔짐승: 몸을 낮춰 뒤로 당겼다가 뿔로 들이받는다. 부딪친 자리에 강한 충돌 섬광.
+    'beast': Attack(Pose(-16, 0, 1.08, 0.88, -10), Pose(32, 0, 1.14, 0.92, 14),
+                    Fx('crit-hit', 0, 0, 52, 8, 0.7)),
+    # 돌 수호자: 상체를 뒤로 젖혔다가 두 주먹으로 바닥을 내려찍는다. 바닥이 꺼지며 먼지가 인다.
+    'warden': Attack(Pose(-7, 0, 0.96, 1.08, -16), Pose(15, 0, 1.10, 0.90, 20),
+                     Fx('heavy-landing', 0, 0, 42, 0, 0.95)),
+    # 외눈 유령: 떠오르며 움츠렸다가 눈에서 보랏빛 광선을 쏜다.
+    'watcher': Attack(Pose(-12, 10, 0.86, 0.86, -8), Pose(6, 4, 1.12, 1.06, 6),
+                      Fx('arcane-beam', 0, 0, 4, 50, 0.5, hold=0.30)),
+    # 여섯 다리 괴물: 납작 엎드렸다가 뛰어올라 앞발로 세 줄을 할퀸다.
+    'crawler': Attack(Pose(-10, 0, 1.14, 0.78, -6), Pose(26, 0, 1.10, 0.90, 11),
+                      Fx('claw-swipe', 0, 0.07, 6, 0, 0.9), hop=18),
+    # 간수 보스: 크게 뒤로 젖혔다가 온몸으로 내려찍는다. 준비하는 동안 무기가 떨어져 내린다.
+    'jailer_boss': Attack(Pose(-18, 5, 0.98, 1.09, -19), Pose(26, 0, 1.12, 0.90, 21),
+                          Fx('hammer-smash', 0, 0.20, 62, 0, 1.25)),
+    # 마법책: 책장을 벌리며 물러났다가 날아들며 전격을 뿜는다.
+    'magic_book': Attack(Pose(-10, 12, 0.82, 1.24, -14), Pose(20, 2, 1.28, 0.80, 8),
+                         Fx('zap-hit', 0, 0.07, 52, 36, 0.8)),
+    # 물약 슬라임: 납작하게 눌렸다가 튀어 올라 덮친다. 떨어진 자리에 산성 물약이 튄다.
+    'potion_slime': Attack(Pose(0, 0, 1.34, 0.58, 0), Pose(22, 0, 0.78, 1.32, 6),
+                           Fx('acid-splash', 0.36, 0.50, 30, 0, 0.8), hop=24),
+    # 마법 갑옷: 검을 뒤로 당겼다가 한 발 내디디며 크게 벤다.
+    'magic_armor': Attack(Pose(-11, 2, 1.00, 1.05, -13), Pose(24, 0, 1.08, 0.96, 15),
+                          Fx('sword-slash', 0, 0.07, 4, 0, 1.0)),
+    # 마녀: 지팡이 끝에 기를 모아 마법탄을 쏜다. 타격 순간에 탄이 터진다.
     'witch': Attack(Pose(-7, 6, 0.96, 1.07, -11), Pose(9, 0, 1.05, 1.00, 9),
-                    'bolt', (190, 120, 255), 56, 56),
-    'grand_witch': Attack(Pose(-9, 10, 0.96, 1.09, -13), Pose(11, 0, 1.07, 1.00, 11),
-                          'bolt', (255, 110, 200), 62, 78),
+                    Fx('magic-missile', 0.10, 0.87, 10, 30, 0.7)),
+    # 대마녀 보스: 높이 떠올라 상대 발밑에 마력을 모았다가 터뜨린다.
+    'grand_witch': Attack(Pose(-9, 12, 0.96, 1.10, -13), Pose(11, 2, 1.08, 1.00, 11),
+                          Fx('mana-burst', 0, 0.33, 62, 0, 1.0)),
 }
 ATTACKS['magic_armor_guard'] = ATTACKS['magic_armor']
 
@@ -85,6 +106,17 @@ def attack_pose(kind: str, windup: float, recovery: float) -> Pose | None:
     return _blend(attack.strike, REST, t * t * (3 - 2 * t))
 
 
+def skill_pose(kind: str, phase: str, t: float) -> Pose:
+    """보스가 스킬을 쓰는 동안의 자세. 예고 때는 준비 자세를 더 크게 잡고 떤다."""
+    attack = ATTACKS[kind]
+    if phase == 'telegraph':
+        pose = _blend(REST, attack.windup, min(1, t * 2.5))
+        return Pose(pose.dx * 1.3 + sin(t * 60) * 2 * t, pose.dy * 1.4, pose.sx, pose.sy, pose.angle * 1.3)
+    if phase == 'active':
+        return _blend(attack.windup, attack.strike, min(1, t * 4))
+    return _blend(attack.strike, REST, t * t * (3 - 2 * t))
+
+
 def draw_posed(image, source, x, floor_y, height, facing, pose, tint=(255, 255, 255)):
     """왼쪽을 보는 스프라이트 한 장을 자세대로 그린다. 발밑 가운데를 축으로 기울인다."""
     width = height * source[2] / source[3] * pose.sx
@@ -101,64 +133,47 @@ def draw_posed(image, source, x, floor_y, height, facing, pose, tint=(255, 255, 
     canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
 
 
-def _pixel(x, y, size, color, alpha):
-    draw_rectangle(x - size, y - size, x + size, y + size, *color, round(255 * max(0, min(1, alpha))))
+def load_attack_fx(folder: Path) -> dict:
+    """폴더의 pixelfx 시트를 모두 읽는다. 시트 이름 → (이미지, pixelfx 메타 정보)."""
+    sheets = {}
+    for path in folder.glob('*.json'):
+        meta = json.loads(path.read_text(encoding='utf-8'))['meta']['pixelfx']
+        sheets[path.stem] = (load_image(str(path.with_suffix('.png'))), meta)
+    return sheets
 
 
-def draw_attack_effect(kind: str, x, floor_y, facing, windup: float, recovery: float):
-    """타격 이펙트. 마법탄은 준비 중에 기를 모으는 빛도 그린다."""
-    attack = ATTACKS[kind]
-    color, reach, base = attack.color, attack.reach, floor_y + attack.height
+def draw_sheet(sheet, time, x, y, facing, scale=1, alpha=255):
+    """시트의 time초 프레임을 그린다. 시트는 오른쪽을 보고 있고 pivot이 (x, y)에 온다."""
+    image, meta = sheet
+    frame = int(time * meta['fps'])
+    if meta['loop']:
+        frame %= meta['frames']
+    elif not 0 <= frame < meta['frames']:
+        return
+    width, height = meta['frameSize']
+    pivot_x, pivot_y = meta['pivot']
+    source = canvas.SDL_Rect(frame % meta['columns'] * width, frame // meta['columns'] * height, width, height)
+    left = x - (pivot_x if facing > 0 else width - pivot_x) * scale
+    top = canvas.get_canvas_height() - y - pivot_y * scale
+    canvas.SDL_SetTextureAlphaMod(image.texture, alpha)
+    canvas.SDL_RenderCopyExF(
+        canvas.renderer, image.texture, source,
+        canvas.SDL_FRect(left, top, width * scale, height * scale), 0, None,
+        canvas.SDL_FLIP_NONE if facing > 0 else canvas.SDL_FLIP_HORIZONTAL,
+    )
+    canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+
+
+def draw_attack_effect(sheets: dict, kind: str, x, floor_y, facing, windup: float, recovery: float):
+    """몬스터 공격 이펙트의 지금 프레임을 그린다."""
+    fx = ATTACKS[kind].fx
     if windup > 0:
-        if attack.effect == 'bolt':
-            t = 1 - windup / WINDUP
-            for index in range(5):
-                turn = index * 2 * pi / 5 + t * 7
-                gather = 16 * (1 - t)
-                _pixel(x + facing * 14 + cos(turn) * gather, base + sin(turn) * gather, 2, color, 0.4 + t * 0.6)
-            _pixel(x + facing * 14, base, 2 + 4 * t, (255, 255, 255), 0.5 * t)
-        return
-    t = (RECOVERY - recovery) / 0.24
-    if recovery <= 0 or t >= 1:
-        return
-    fade = 1 - t
-    if attack.effect == 'slash':
-        # 위에서 아래로 휘두른 호. 지나간 자리가 꼬리로 남는다.
-        for index in range(9):
-            sweep = min(1, t * 2.2) - index * 0.07
-            if sweep < 0:
-                break
-            turn = radians(78 - 120 * sweep)
-            _pixel(x + facing * cos(turn) * reach, base + sin(turn) * reach * 0.62,
-                   4 - index * 0.35, (255, 255, 255) if index < 2 else color, fade * (1 - index / 9))
-    elif attack.effect == 'slam':
-        # 바닥을 따라 퍼지는 충격과 튀어 오르는 파편.
-        for index in range(7):
-            spread = (index + 1) / 7 * reach * min(1, t * 1.8)
-            rise = sin(pi * min(1, t * 1.3)) * (10 + index % 3 * 7)
-            for side in (1, -0.45):
-                _pixel(x + facing * (14 + spread) * side, floor_y + 3 + rise * (index % 2), 3, color, fade)
-        draw_rectangle(x + facing * 10, floor_y, x + facing * (14 + reach * min(1, t * 1.8)), floor_y + 3,
-                       255, 255, 255, round(200 * fade))
-    elif attack.effect == 'bolt':
-        # 날아가는 탄과 꼬리, 닿는 순간 터진다.
-        travel = min(1, t * 1.7)
-        head = x + facing * (14 + reach * travel)
-        for index in range(6):
-            _pixel(head - facing * index * 6, base + sin(t * 30 + index) * 2, 5 - index * 0.7,
-                   (255, 255, 255) if index == 0 else color, fade * (1 - index / 6))
-        if travel == 1:
-            burst = (t * 1.7 - 1) / 0.7
-            for index in range(8):
-                turn = index * pi / 4
-                _pixel(head + cos(turn) * 18 * burst, base + sin(turn) * 18 * burst, 3, color, 1 - burst)
+        time = fx.start + (fx.hit - fx.start) * (1 - windup / WINDUP)
+        alpha = 255
     else:
-        # 돌진: 뒤로 길게 남는 속도선과 머리 앞의 충돌 불꽃.
-        for index in range(5):
-            y = base - 12 + index * 9
-            length = (26 + index % 2 * 14) * fade
-            draw_rectangle(x - facing * (10 + length), y, x - facing * 10, y + 2, *color, round(210 * fade), filled=True)
-        for index in range(6):
-            turn = radians(-50 + index * 20)
-            burst = 8 + 20 * min(1, t * 2)
-            _pixel(x + facing * (reach + cos(turn) * burst), base + sin(turn) * burst, 3, (255, 255, 255), fade)
+        elapsed = RECOVERY - recovery
+        if recovery <= 0 or elapsed >= fx.hold:
+            return
+        time = fx.hit + elapsed
+        alpha = round(255 * min(1, (fx.hold - elapsed) / 0.15))  # 끊기지 않게 끝에서 흐려진다.
+    draw_sheet(sheets[fx.sheet], time, x + facing * fx.forward, floor_y + fx.lift, facing, fx.scale, alpha)

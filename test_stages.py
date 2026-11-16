@@ -6,6 +6,7 @@ SOLUTIONS는 막혔을 때 읽는 공략집이기도 하다.
 """
 import sys
 
+import boss_skills
 from stages import STAGES, STEP
 from world import Motion, World
 
@@ -80,6 +81,8 @@ class Bot:
             foe = min(targets, key=lambda e: abs(e.actor.x - self.me.x))
             gap = foe.actor.x - self.me.x
             toward = 1 if gap >= 0 else -1
+            if self.dodge(foe):
+                continue
             if foe.windup > 0 and abs(gap) < 90:
                 self.tick(-toward)
             elif abs(gap) > 118 or self.me.facing != toward:
@@ -87,6 +90,33 @@ class Bot:
             else:
                 self.tick(attack='thrust')
         raise AssertionError(f'{kind}을 처치하지 못했습니다 {self}')
+
+    def dodge(self, foe):
+        """보스 스킬을 피한다. 피하는 동작을 했으면 True."""
+        me = self.me
+        skill = boss_skills.current(foe)
+        # 돌진과 충격파는 예고가 끝나는 순간에 맞춰 뛴다.
+        if skill and skill.name in ('charge', 'quake') and skill.telegraph - 0.08 <= foe.skill_time and me.jump_time == 0 \
+                and foe.skill_time < skill.telegraph + skill.active:
+            self.tick(jump=True)
+            return True
+        for effect in self.w.boss_effects:
+            if effect.hit_at is None or effect.floor != me.floor or effect.age > effect.hit_at + effect.hit_for:
+                continue
+            distance = effect.x - me.x
+            if effect.jumpable:
+                # 다가오는 구체는 닿기 직전에 뛰어넘는다.
+                if me.jump_time == 0 and abs(distance) < 70:
+                    self.tick(jump=True)
+                    return True
+            elif abs(distance) < effect.radius + 30:
+                # 낙뢰 문양에서는 걸어서 벗어난다.
+                self.tick(-1 if distance > 0 else 1)
+                return True
+        if me.jump_time > 0:
+            self.tick()
+            return True
+        return False
 
     def __repr__(self):
         w = self.w

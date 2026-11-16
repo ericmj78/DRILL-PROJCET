@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+import boss_skills
 from stages import (
     ACTOR_RADIUS, BOSS_KINDS, DOOR_GRACE, ENEMY_KINDS,
     GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MOVE_SPEED,
@@ -83,6 +84,10 @@ class Enemy:
     windup: float = 0
     recovery: float = 0
     flash: float = 0
+    skill: str = ''            # 보스가 쓰는 중인 스킬 이름 (boss_skills.py)
+    skill_time: float = 0
+    skill_cooldown: float = 0
+    skill_index: int = 0
 
 
 def approach_direction(start: float, end: float) -> int:
@@ -109,6 +114,9 @@ class World:
         self.attack_kind = 'slash'
         self.attack_duration = 0.28
         self.attack_hit_pending = False
+        self.attack_age = 9.0   # 마지막 공격을 시작한 뒤 흐른 시간. 화면의 검기 이펙트가 쓴다.
+        self.hit_sparks = []    # 공격이 적에게 맞은 자리 [x, 층, 지난 시간]
+        self.boss_effects = []  # 보스 스킬 이펙트 (boss_skills.Effect)
         self.time = 0.0
         self.result = 'playing'
         self.message = ''
@@ -208,6 +216,10 @@ class World:
         self.invulnerable = max(0, self.invulnerable - STEP)
         self.attack_cooldown = max(0, self.attack_cooldown - STEP)
         self.attack_flash = max(0, self.attack_flash - STEP)
+        self.attack_age += STEP
+        for spark in self.hit_sparks:
+            spark[2] += STEP
+        self.hit_sparks = [spark for spark in self.hit_sparks if spark[2] < 0.5]
         if self.attack_hit_pending and self.attack_flash <= self.attack_duration * 0.55:
             self.attack_hit_pending = False
             self._apply_attack()
@@ -249,6 +261,7 @@ class World:
         self._update_lift()
         self._update_watch()
 
+        boss_skills.update_effects(self)
         for enemy in self.enemies:
             self._update_enemy(enemy)
             if self.health <= 0:
@@ -482,6 +495,7 @@ class World:
         self.attack_duration = 0.28 if kind == 'slash' else 0.24
         self.attack_cooldown = weapon.cooldown
         self.attack_flash = self.attack_duration
+        self.attack_age = 0.0
         self.attack_hit_pending = True
 
     def _apply_attack(self):
@@ -492,6 +506,7 @@ class World:
             offset = enemy.actor.x - self.player.x
             if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, reach):
                 continue
+            self.hit_sparks.append([enemy.actor.x, enemy.actor.floor, 0.0])
             if enemy.health is None:
                 self.notify('이 적은 분신으로 유인하거나 우회하세요.')
             else:
@@ -537,6 +552,9 @@ class World:
                     enemy.unseen = 0
                     break
 
+        if boss_skills.update(self, enemy):
+            return
+
         if enemy.windup > 0:
             enemy.windup -= STEP
             if enemy.windup <= 0:
@@ -566,6 +584,15 @@ class World:
         if direction:
             actor.facing = direction
             self._move_x(actor, direction * min(abs(destination - actor.x), speed * STEP))
+
+    def hurt(self, message: str) -> bool:
+        """본체가 피해를 한 번 입는다. 무적 시간 중이면 False."""
+        if self.invulnerable > 0:
+            return False
+        self.health -= 1
+        self.invulnerable = 0.92
+        self.notify(message)
+        return True
 
     def _enemy_attack(self, enemy: Enemy, distance: int):
         target = enemy.target

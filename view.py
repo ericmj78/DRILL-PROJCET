@@ -10,8 +10,10 @@ from pico2d import draw_line, draw_rectangle, load_font, load_image
 from pico2d import pico2d as canvas
 
 from animation import AttackCycle, WalkCycle, draw_region
-from monster_attack import attack_pose, draw_attack_effect, draw_posed
+import boss_skills
+from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
 from monster_walk import MONSTER_GAITS, MonsterWalk
+import player_attack
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, RIGHT, STAGES, STEP, WEAPONS
 from world import JUMP_DURATION
 
@@ -56,9 +58,6 @@ WEAPON_SPRITES = {
     3: ((173, 703, 299, 466), 43, 0.72),
     4: ((884, 625, 126, 601), 62, 0.76),
 }
-# Hand position and weapon angle for the four right-facing attack poses.
-WEAPON_SWING = ((14, 65, -28), (25, 69, 26), (34, 74, 82), (14, 65, 18))
-WEAPON_THRUST = ((14, 65, 80), (25, 69, 90), (38, 74, 90), (14, 65, 80))
 JUMP_FRAMES = (
     (90, 146, 246, 280), (523, 66, 248, 358), (967, 24, 228, 362), (1410, 10, 230, 302),
     (76, 459, 238, 354), (519, 465, 228, 392), (955, 533, 240, 340), (1430, 467, 196, 406),
@@ -150,6 +149,7 @@ class View:
             load_asset(actors['echo']['sheet']), actors['echo']['frames'],
             actors['echo']['draw_height'], actors['echo']['stride_per_frame'],
         )
+        self.attack_fx = load_attack_fx(ASSETS / 'attack_fx')
         self.enemy_walk = {
             name: MonsterWalk(load_asset(gait.sheet), gait)
             for name, gait in MONSTER_GAITS.items()
@@ -486,6 +486,9 @@ class View:
             feet = 0.30 if enemy.spawn.kind in ('beast', 'crawler') else 0.47
             tint = (255, 166, 156) if enemy.flash > 0 else (255, 255, 255)
             pose = attack_pose(enemy.spawn.kind, enemy.windup, enemy.recovery)
+            skill_phase = boss_skills.phase(enemy)
+            if skill_phase is not None:
+                pose = skill_pose(enemy.spawn.kind, *skill_phase)
             if pose is not None:
                 # 공격 중에는 monster_attack.py의 자세 스크립트대로 그린다.
                 actor = screen_enemy.actor
@@ -499,7 +502,7 @@ class View:
                 else:
                     image = self.enemies[enemy.spawn.kind]
                     draw_posed(image, (0, 0, image.w, image.h), x, y, kind.size, actor.facing, pose, tint)
-                draw_attack_effect(enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
+                draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
             elif enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
             elif enemy.spawn.kind in ('magic_book', 'potion_slime'):
@@ -526,6 +529,11 @@ class View:
                 color = RED if enemy.windup > 0 else CYAN if world.echo and enemy.target is world.echo.actor else GOLD
                 self.small.draw(x - 3, bar_y + 13, '!', color)
 
+        for effect in world.boss_effects:
+            if effect.age >= 0:
+                draw_sheet(self.attack_fx[effect.sheet], effect.age, effect.x - self.camera_x,
+                           self.floor_y[effect.floor], effect.facing, effect.scale)
+
         player_alpha = 170 if recording else 255
         if world.invulnerable > 0 and int(world.time * 18) % 2:
             player_alpha = 130
@@ -536,23 +544,25 @@ class View:
             floors = list(self.floor_y)
             floors[lower] += (floors[lower + 1] - floors[lower]) * world.lift_progress
             self.floor_y = tuple(floors)
+        floor = self._actor_floor_y(world.player) + world.player.jump_height
         if world.attack_flash > 0:
+            # 공격 중에는 player_attack.py의 키프레임대로 몸을 내디디고 무기를 움직인다.
             progress = 1 - world.attack_flash / world.attack_duration
-            floor = self._actor_floor_y(world.player) + world.player.jump_height
-            self.player_attack.draw(
-                player, floor, progress, opacity=player_alpha,
-            )
+            body = copy(player)
+            body.x += player.facing * player_attack.weapon_pose(world.attack_kind, progress)[3]
+            self.player_attack.draw(body, floor, progress, opacity=player_alpha)
             if world.weapon_index:
+                for past, strength in player_attack.trail(progress):
+                    self._draw_weapon(player, world.weapon_index, floor, past, round(player_alpha * strength), world.attack_kind)
                 self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha, world.attack_kind)
-            elif 0.50 <= progress <= 0.78:
-                direction = world.player.facing
-                x = player.x + direction * 37
-                y = floor + 66
-                line(x - direction * 5, y + 3, x, y + 10, GOLD)
-                line(x + direction * 4, y + 3, x + direction * 11, y + 3, GOLD)
-                line(x - direction * 3, y - 3, x + direction * 2, y - 8, GOLD)
         else:
             self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
+        player_attack.draw_attack_effect(
+            self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
+            WEAPONS[world.weapon_index].reach, player.x, floor, player.facing)
+        for spark_x, spark_floor, age in world.hit_sparks:
+            player_attack.draw_hit_spark(self.attack_fx, age, spark_x - self.camera_x,
+                                         self.floor_y[spark_floor], world.player.facing)
         self.floor_y = normal_floors
         if recording is not None:
             actor = self._screen_actor(recording.preview)
@@ -581,11 +591,10 @@ class View:
     def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind):
         region, height, grip = WEAPON_SPRITES[index]
         width = round(height * region[2] / region[3])
-        poses = WEAPON_SWING if attack_kind == 'slash' else WEAPON_THRUST
-        hand_x, hand_y, angle = poses[min(int(progress * 4), 3)]
+        hand_x, hand_y, angle, lunge = player_attack.weapon_pose(attack_kind, progress)
         grip_y = round(height * grip)
         center = canvas.SDL_Point(width // 2, grip_y)
-        left = actor.x + actor.facing * hand_x - center.x
+        left = actor.x + actor.facing * (hand_x + lunge) - center.x
         bottom = floor_y + hand_y + grip_y - height
         target = canvas.to_sdl_rect(left, bottom, width, height)
         texture = (self.hero_sword_art if index == 2 else self.weapon_art).texture
