@@ -94,6 +94,7 @@ MONSTER_NAMES = {
     'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '여섯 다리 괴물',
     'jailer_boss': '쇠사슬 간수', 'magic_book': '마법책', 'potion_slime': '물약 슬라임',
     'magic_armor': '마법 갑옷', 'magic_armor_guard': '갑옷 경비병', 'witch': '마녀', 'grand_witch': '대마녀',
+    'echo_knight': '뒤틀린 잔향의 기사',
 }
 
 
@@ -131,6 +132,7 @@ class View:
         self.boss_bars = {
             'jailer_boss': load_asset('ui_concepts/boss_bar_jailer_named.png'),
             'grand_witch': load_asset('ui_concepts/boss_bar_witch_named.png'),
+            'echo_knight': load_asset('ui_concepts/boss_health_bar_concept.png'),
         }
         self.title_art = load_asset('title_art.png')
         self.stage_art = {}
@@ -234,7 +236,7 @@ class View:
             self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
         self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
-        if world.index in (0, 1, 3, 4, 5):
+        if world.index in (0, 1, 3, 4, 8):
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
@@ -243,7 +245,7 @@ class View:
             self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y
                                  for floor in range(world.stage.floors))
-            if world.index in (0, 1):
+            if world.index in (0, 1, 8):
                 corridor = self.stage_art[1][0]
                 for floor_y in self.floor_y:
                     bottom = floor_y - (corridor.h - 773) * 400 / corridor.h
@@ -258,11 +260,11 @@ class View:
                     draw_region(corridor, (0, source_top, corridor.w, source_height),
                                 -self.camera_x, bottom, WIDTH * 2, 400)
                 self._draw_wizard_tower_effects(world.time)
-        elif world.index in (2, 6):
+        elif world.index in (2, 5):
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
-            lift_offset = world.lift_progress if world.index == 6 and world.lift_riding and focus is world.player else 0
+            lift_offset = world.lift_progress if world.index == 5 and world.lift_riding and focus is world.player else 0
             target = 400 * (focus.floor + focus.elevator_offset + lift_offset)
             self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y for floor in range(5))
@@ -285,7 +287,7 @@ class View:
                 arena = self.witch_boss_arena
             draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
                         self.floor_y[4] - 95, WIDTH * 2, 560)
-            if world.index == 6:
+            if world.index == 5:
                 self._draw_wizard_tower_effects(world.time)
         elif world.index == 1:
             # Stack the same prison corridor for each playable floor.
@@ -299,7 +301,7 @@ class View:
                             -self.camera_x, bottom, WIDTH * 2, height)
                 floor_y.append(bottom + round((image.h - 773) * height / image.h))
             self.floor_y = tuple(floor_y)
-        elif 3 <= world.index <= 6:
+        elif 3 <= world.index <= 5:
             single_floor = world.stage.floors == 1
             source_top = 330 if single_floor else 0
             source_height = self.wizard_art.h - source_top
@@ -309,7 +311,7 @@ class View:
             draw_region(self.wizard_art, (0, source_top, self.wizard_art.w, source_height),
                         -self.camera_x, 105, WIDTH * 2, 520)
             self._draw_wizard_effects(world.time, single_floor)
-        elif world.index == 7:
+        elif world.index == 6:
             image = self.late_two_floor_art
             self.floor_y = tuple(105 + round((image.h - row) * 520 / image.h)
                                  for row in (635, 333))
@@ -385,7 +387,7 @@ class View:
     def _draw_wizard_tower_effects(self, time):
         sx = WIDTH * 2 / self.wizard_art.w
         scale_y = 400 / (self.wizard_art.h - 330)
-        for floor in range(4):
+        for floor in range(min(4, len(self.floor_y))):
             y = self.floor_y[floor] + (675 - 570) * scale_y
             for x0, x1 in ((715, 880), (950, 1110), (1180, 1340), (1405, 1555), (1610, 1765)):
                 x = x0 * sx - self.camera_x
@@ -393,6 +395,8 @@ class View:
                 self._wizard_fx_frame('rain', int(time * 4), x, y, width, height, 115)
                 if 9.0 <= time % 18 < 9.5:
                     self._wizard_fx_frame('storm', 12 + int((time % 18 - 9.0) * 4), x, y, width, height, 110)
+        if len(self.floor_y) < 5:
+            return
         # The arena image is a separate, full-height room; keep rain on its windows.
         arena = self.witch_boss_arena
         arena_y = self.floor_y[4] - 95
@@ -609,6 +613,9 @@ class View:
                 draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
             elif enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
+            elif enemy.spawn.kind == 'echo_knight':
+                self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size,
+                             world.time, feet=0.50, faces=-1, tint=tint)
             elif enemy.spawn.kind in ('magic_book', 'potion_slime'):
                 image = self.enemies[enemy.spawn.kind]
                 bob = 5 + sin(world.time * 3) * 4 if enemy.spawn.kind == 'magic_book' else 0
@@ -850,6 +857,10 @@ class View:
         height = width * image.h / image.w
         scale = width / image.w
         draw_region(image, (0, 0, image.w, image.h), left, bottom, width, height)
+        if boss.spawn.kind == 'echo_knight':
+            name = MONSTER_NAMES[boss.spawn.kind]
+            self.small.draw(left + width / 2 - text_width(self.small, name) / 2,
+                            bottom + height * 0.67, name, GOLD)
 
         # Darken the original bar texture to make an empty track, then reveal the
         # same red pixels in proportion to the current health.

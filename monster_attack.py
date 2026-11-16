@@ -80,6 +80,7 @@ ATTACKS = {
                           Fx('mana-burst', 0, 0.33, 62, 0, 1.0)),
 }
 ATTACKS['magic_armor_guard'] = ATTACKS['magic_armor']
+ATTACKS['echo_knight'] = ATTACKS['magic_armor']
 
 
 def _blend(a: Pose, b: Pose, t: float) -> Pose:

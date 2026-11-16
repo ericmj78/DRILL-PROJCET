@@ -72,6 +72,11 @@ SKILLS = {
         Skill('bolts', '대마녀의 낙뢰! 바닥의 문양에서 벗어나세요.', 0.50, 0.90, 0.35, 0, 900, 9),
         Skill('orb', '대마녀의 마력 구체! 점프로 넘으세요.', 0.50, 0.20, 0.45, 0, 900, 8),
     ),
+    'echo_knight': (
+        Skill('charge', '잔향 기사의 돌진! 점프로 피하세요.', 0.60, 0.55, 0.60, 140, 560, 11),
+        Skill('orb', '잔향 기사의 마력 구체! 점프로 피하세요.', 0.50, 0.20, 0.45, 0, 900, 8),
+        Skill('bolts', '잔향 기사의 낙뢰! 표시된 곳을 피하세요.', 0.50, 0.90, 0.35, 0, 900, 9),
+    ),
 }
 CHARGE_SPEED = 520
 CHAIN_REACH = 190  # 쇠사슬이 닿는 앞쪽 거리
@@ -137,7 +142,8 @@ def update(world, enemy) -> bool:
             world._move_x(actor, actor.facing * CHARGE_SPEED * STEP)
             player = world.player
             if player.floor == actor.floor and player.jump_time == 0 and abs(player.x - actor.x) < 36:
-                if world.hurt(skill.damage, '간수의 돌진에 맞았습니다.'):
+                message = '잔향 기사의 돌진에 맞았습니다.' if enemy.spawn.kind == 'echo_knight' else '간수의 돌진에 맞았습니다.'
+                if world.hurt(skill.damage, message):
                     effects.append(Effect('crit-hit', player.x, player.floor, actor.facing, scale=0.8))
     elif skill.name == 'chain' and fired:
         player = world.player

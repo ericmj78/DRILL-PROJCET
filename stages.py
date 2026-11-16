@@ -9,7 +9,7 @@ MAX_RECORD_SECONDS = 9
 # 본체 레벨 (BALANCE.md). 레벨 1~9에서 다음 레벨까지 필요한 경험치이며 최대 레벨은 10이다.
 LEVEL_UP_XP = (30, 45, 60, 80, 100, 120, 140, 160, 180)
 HAZARD_RATIO = 0.2      # 숨은 함정은 최대 체력의 20%를 깎는다.
-LATE_STAGE_SCALE = 1.6  # 8~10스테이지에 다시 나오는 초반 몬스터의 체력·피해 배율
+LATE_STAGE_SCALE = 1.6  # 7~9스테이지의 몬스터 체력·피해 배율
 
 
 def max_health(level: int) -> int:
@@ -128,9 +128,10 @@ ENEMY_KINDS = {
     'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, 40, 115, xp=24, damage_ratio=0.4),
     'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 30, 112, damage=10, xp=22),
     'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 230, damage=11, xp=120),
+    'echo_knight': EnemyKind('monster_concepts/echo-knight-boss.png', 70, 260, 65, 180, 240, damage=12, xp=160),
 }
 
-BOSS_KINDS = frozenset(('jailer_boss', 'grand_witch'))
+BOSS_KINDS = frozenset(('jailer_boss', 'grand_witch', 'echo_knight'))
 
 
 @dataclass(frozen=True)
@@ -249,24 +250,7 @@ STAGES = (
         echo_seconds=5,
     ),
     Stage(
-        '06  시야 밖의 길',
-        '분신이 아래층을 지나는 동안만 위층 발판이 생깁니다. 뿔짐승이 멀리 갔을 때 분신을 보내세요.',
-        4, Point(310, 0), Point(2100, 3),
-        elevators=(Stair(2000, 0), Stair(2000, 1), Stair(2000, 2)),
-        stairs=(Stair(320, 0), Stair(680, 0), Stair(1250, 0), Stair(1850, 0)),
-        gates=(Gate('A', Point(1000, 0), Point(1150, 1)),),
-        enemies=(
-            EnemySpawn('witch', Point(1980, 0), (1900, 2070)),
-            EnemySpawn('magic_armor', Point(900, 0), (830, 1070)),
-            EnemySpawn('magic_book', Point(900, 1), (830, 1000)),
-            EnemySpawn('beast', Point(1600, 0), (1500, 1770)),
-        ),
-        walls=(Point(1800, 0), Point(1150, 0)),
-        bridge=EchoBridge((Point(1450, 1), Point(1520, 1), Point(1590, 1)), 0),
-        echo_seconds=3,
-    ),
-    Stage(
-        '07  대마녀의 다섯 층',
+        '06  대마녀의 다섯 층',
         '분신으로 균형 발판을 작동하고, 승강기를 타고 5층 대마녀에게 가세요.',
         5, Point(111, 0), Point(2100, 4),
         stairs=(Stair(145, 0),),
@@ -289,7 +273,7 @@ STAGES = (
         echo_seconds=3.5,
     ),
     Stage(
-        '08  두 번째 잔향',
+        '07  두 번째 잔향',
         '분신은 B 발판을 밟은 뒤 아래층 감지선까지 가야 합니다. 본체는 위층 감지선을 함께 통과하세요.',
         2, Point(120, 0), Point(105, 1),
         stairs=(Stair(1300, 0),),
@@ -306,7 +290,7 @@ STAGES = (
         enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
-        '09  되돌아가는 발자국',
+        '08  되돌아가는 발자국',
         '3층의 함정은 분신 곁에서만 보입니다. 분신을 앞세워 뛰어넘고, 새 분신을 D 발판으로 돌려보내세요.',
         3, Point(112, 0), Point(2100, 2),
         stairs=(Stair(690, 0), Stair(950, 1)),
@@ -324,9 +308,10 @@ STAGES = (
         enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
-        '10  마지막 잔향',
-        '유인, 수호자, 숨은 함정이 모두 나옵니다. 분신을 언제 어디서 내보낼지 먼저 정하세요.',
-        3, Point(100, 0), Point(2100, 2),
+        '09  마지막 잔향',
+        '유인과 숨은 함정을 지나 승강기를 타고 마지막 보스를 처치하세요.',
+        4, Point(100, 0), Point(2100, 3),
+        elevators=(Stair(2000, 2),),
         stairs=(Stair(670, 0), Stair(1300, 1)),
         gates=(
             Gate('A', Point(252, 0), Point(510, 0)),
@@ -336,6 +321,7 @@ STAGES = (
             EnemySpawn('beast', Point(1008, 0), (948, 1060)),
             EnemySpawn('watcher', Point(1180, 1), (1100, 1250)),
             EnemySpawn('warden', Point(1500, 2), (1500, 1500)),
+            EnemySpawn('echo_knight', Point(1120, 3), (1050, 1190)),
         ),
         hidden_hazards=(Point(1700, 2), Point(1900, 2)),
         guard=Point(1500, 2),
