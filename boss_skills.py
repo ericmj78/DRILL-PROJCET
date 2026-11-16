@@ -33,6 +33,7 @@ class Effect:
     facing: int = 1
     age: float = 0.0          # 음수면 그만큼 뒤에 시작한다
     scale: float = 1.0
+    lift: float = 0.0         # 바닥 위 높이
     speed: float = 0.0        # 바닥을 따라 나아가는 속도
     life: float = 3.5
     hit_at: float | None = None  # 이 시각부터 hit_for초 동안 radius 안의 본체가 맞는다
@@ -41,20 +42,41 @@ class Effect:
     grow: float = 0.0         # 맞는 범위가 초당 넓어지는 속도(충격파)
     jumpable: bool = False    # 점프로 피할 수 있는가
     damage: int = 0
+    drop: float = 0.0         # 이 높이에서 떨어지기 시작해 life가 끝날 때 바닥에 닿는다(낙석)
+    shake: float = 0.0        # hit_at 순간에 화면을 흔드는 시간
+
+
+@dataclass
+class GravityField:
+    x: float
+    floor: int
+    age: float = 0.0
+    warning: float = 0.9
+    duration: float = 4.0
+    radius: float = 220.0
+    captured: bool = False
+    escape_direction: int = 0
+    escape_time: float = 0.0
+    damage_timer: float = 0.0
+    escape_immunity: float = 0.0
 
 
 SKILLS = {
     'jailer_boss': (
+        Skill('chain', '간수의 쇠사슬! 뒤로 물러나 사슬 밖으로 나가세요.', 0.50, 0.15, 0.60, 40, 170, 10),
+        Skill('rockfall', '낙석! 바닥의 그림자에서 벗어나세요.', 0.60, 1.50, 0.50, 0, 600, 9),
         Skill('charge', '간수의 돌진! 점프로 뛰어넘으세요.', 0.60, 0.55, 0.60, 140, 560, 11),
-        Skill('quake', '간수의 지면 충격파! 내려찍는 순간 점프하세요.', 0.70, 0.45, 0.65, 0, 300, 9),
     ),
     'grand_witch': (
-        Skill('blink', '대마녀가 순간이동합니다.', 0.45, 0.10, 0.30, 0, 140),
-        Skill('bolts', '대마녀의 낙뢰! 바닥의 문양에서 벗어나세요.', 0.50, 0.90, 0.35, 140, 900, 9),
-        Skill('orb', '대마녀의 마력 구체! 점프로 넘으세요.', 0.50, 0.20, 0.45, 150, 900, 8),
+        Skill('gravity', '중력 생성! 반대 방향키로 저항하세요.', 0.90, 0.10, 0.40, 0, 900),
+        Skill('bolts', '대마녀의 낙뢰! 바닥의 문양에서 벗어나세요.', 0.50, 0.90, 0.35, 0, 900, 9),
+        Skill('orb', '대마녀의 마력 구체! 점프로 넘으세요.', 0.50, 0.20, 0.45, 0, 900, 8),
     ),
 }
 CHARGE_SPEED = 520
+CHAIN_REACH = 190  # 쇠사슬이 닿는 앞쪽 거리
+CHAIN_CRACK = 0.27 # chain-whip 시트에서 사슬 끝이 터지는 시각
+ROCK_FALL = 0.9    # 바위가 떨어지는 데 걸리는 시간
 
 
 def current(enemy) -> Skill | None:
@@ -93,10 +115,12 @@ def update(world, enemy) -> bool:
             index = (enemy.skill_index + offset) % len(skills)
             if skills[index].near <= distance <= skills[index].far:
                 enemy.skill, enemy.skill_time = skills[index].name, 0.0
-                if skills[index].name != 'blink':  # 순간이동은 순서를 넘기지 않아 원거리 스킬이 번갈아 나온다.
-                    enemy.skill_index = index + 1
+                enemy.skill_index = index + 1
                 actor.facing = 1 if target.x >= actor.x else -1
                 world.notify(skills[index].label)
+                if skills[index].name == 'gravity':
+                    x = max(LEFT + 100, min(RIGHT - 100, target.x + actor.facing * 90))
+                    world.gravity_field = GravityField(x, actor.floor)
                 return True
         return False
 
@@ -115,16 +139,18 @@ def update(world, enemy) -> bool:
             if player.floor == actor.floor and player.jump_time == 0 and abs(player.x - actor.x) < 36:
                 if world.hurt(skill.damage, '간수의 돌진에 맞았습니다.'):
                     effects.append(Effect('crit-hit', player.x, player.floor, actor.facing, scale=0.8))
-    elif skill.name == 'quake' and fired:
-        effects.append(Effect('ground-slam', actor.x + actor.facing * 40, actor.floor, actor.facing, scale=1.5,
-                              hit_at=0.0, hit_for=skill.active, radius=50, grow=300, jumpable=True,
-                              damage=skill.damage))
-    elif skill.name == 'blink' and fired:
-        effects.append(Effect('blink-out', actor.x, actor.floor, actor.facing, scale=1.6))
-        side = 1 if RIGHT - aim.x > aim.x - LEFT else -1
-        actor.x = min(RIGHT - 60, max(LEFT + 60, aim.x + side * 190))
-        actor.facing = -side
-        effects.append(Effect('blink-in', actor.x, actor.floor, actor.facing, scale=1.6))
+    elif skill.name == 'chain' and fired:
+        player = world.player
+        world.shake = max(world.shake, 0.15)
+        if player.floor == actor.floor and 0 < (player.x - actor.x) * actor.facing < CHAIN_REACH:
+            world.hurt(skill.damage, '간수의 쇠사슬에 맞았습니다.')
+    elif skill.name == 'rockfall' and fired:
+        # 바위 세 개가 표적 자리와 양옆에 차례로 떨어진다. 닿는 순간 터지고 화면이 흔들린다.
+        for delay, offset in ((0.0, 0), (0.3, 130), (0.6, -130)):
+            x = min(RIGHT - 30, max(LEFT + 30, aim.x + offset))
+            effects.append(Effect('rock', x, actor.floor, age=-delay, scale=3.0, life=ROCK_FALL, drop=560))
+            effects.append(Effect('dirt-explosion', x, actor.floor, age=-delay - ROCK_FALL, scale=0.7,
+                                  hit_at=0.0, hit_for=0.10, radius=38, damage=skill.damage, shake=0.35))
     elif skill.name == 'bolts' and fired:
         for delay, ahead in ((0.0, 0), (0.4, 130)):
             effects.append(Effect('lightning-strike', aim.x + aim.facing * ahead, actor.floor, age=-delay,
@@ -134,9 +160,49 @@ def update(world, enemy) -> bool:
                               speed=250, life=2.6, hit_at=0.0, hit_for=2.6, radius=22, jumpable=True,
                               damage=skill.damage))
     if enemy.skill_time >= skill.telegraph + skill.active + skill.rest:
-        # 순간이동 뒤에는 벌린 거리에서 곧바로 원거리 스킬을 잇는다.
-        enemy.skill, enemy.skill_cooldown = '', 0.4 if skill.name == 'blink' else COOLDOWN
+        enemy.skill, enemy.skill_cooldown = '', COOLDOWN
     return True
+
+
+def update_gravity(world, horizontal):
+    field = world.gravity_field
+    if field is None:
+        return
+    field.age += STEP
+    field.escape_immunity = max(0.0, field.escape_immunity - STEP)
+    if field.age >= field.warning + field.duration:
+        world.gravity_field = None
+        return
+    player = world.player
+    if field.age < field.warning or player.floor != field.floor:
+        field.captured = False
+        return
+    if field.captured:
+        player.x = field.x
+        player.moving = False
+        field.damage_timer -= STEP
+        if field.damage_timer <= 0:
+            world.hurt(3, '중력 구체에 갇혔습니다! 반대 방향키로 탈출하세요.')
+            field.damage_timer = 1.0
+        if horizontal == field.escape_direction:
+            field.escape_time += STEP
+        else:
+            field.escape_time = max(0.0, field.escape_time - STEP * 0.5)
+        if field.escape_time >= 1.0:
+            field.captured = False
+            field.escape_immunity = 0.8
+            world._move_x(player, field.escape_direction * 45)
+        return
+    distance = field.x - player.x
+    if abs(distance) > field.radius or field.escape_immunity > 0:
+        return
+    if abs(distance) <= 18:
+        field.captured = True
+        field.escape_direction = -1 if distance >= 0 else 1
+        field.escape_time = 0.0
+        field.damage_timer = 0.0
+        return
+    world._move_x(player, (1 if distance > 0 else -1) * 180 * STEP)
 
 
 def update_effects(world):
@@ -147,6 +213,8 @@ def update_effects(world):
         if effect.age < 0:
             continue
         effect.x += effect.facing * effect.speed * STEP
+        if effect.shake and effect.hit_at is not None and effect.hit_at <= effect.age < effect.hit_at + STEP:
+            world.shake = max(world.shake, effect.shake)
         if effect.hit_at is None or not effect.hit_at <= effect.age <= effect.hit_at + effect.hit_for:
             continue
         reach = effect.radius + effect.grow * (effect.age - effect.hit_at)

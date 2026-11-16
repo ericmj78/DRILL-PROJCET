@@ -1,15 +1,15 @@
 from time import perf_counter
 
 from pico2d import (
-    SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_BACKSPACE, SDLK_c,
+    SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_b, SDLK_BACKSPACE, SDLK_c,
     SDLK_DOWN, SDLK_e, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
     SDLK_s, SDLK_SPACE, SDLK_UP, clear_canvas, close_canvas, delay, get_events,
     hide_lattice, open_canvas, update_canvas,
 )
 from pico2d import pico2d as canvas
 
-from stages import STAGES, STEP
-from title_menu import TitleMenu
+from stages import BOSS_KINDS, STAGES, STEP
+from title_menu import BossSelector, TitleMenu
 from view import HEIGHT, WIDTH, View
 from world import Motion, World
 
@@ -38,6 +38,7 @@ def main():
         accumulator = 0.0
         previous = perf_counter()
         stage_entry = None
+        boss_selector = None
 
         while True:
             now = perf_counter()
@@ -73,6 +74,17 @@ def main():
                 if event.type != SDL_KEYDOWN:
                     continue
                 key = event.key
+                if boss_selector is not None:
+                    choice = boss_selector.handle(key)
+                    if choice == 'cancel':
+                        boss_selector = None
+                    elif choice is not None:
+                        world = World(choice, weapon_index=world.weapon_index, xp=world.xp)
+                        world.warp_to_boss()
+                        screen = 'play'
+                        boss_selector = None
+                    accumulator = 0.0
+                    continue
                 if stage_entry is not None:
                     if key == SDLK_ESCAPE or key == SDLK_p:
                         stage_entry = None
@@ -100,6 +112,14 @@ def main():
                     screen = 'intro'
                     menu.open('main')
                     pressed.clear()
+                    continue
+                if key == SDLK_b:
+                    boss_selector = BossSelector()
+                    pressed.clear()
+                    pending_stairs = 0
+                    pending_jump = False
+                    pending_attack = False
+                    accumulator = 0.0
                     continue
                 if key == SDLK_r or (key == SDLK_RETURN and world.result == 'cleared'):
                     index = world.index if key == SDLK_r else (world.index + 1) % len(STAGES)
@@ -133,7 +153,7 @@ def main():
                     pending_attack = 'slash' if key == SDLK_a else 'thrust'
 
             while accumulator >= STEP:
-                if screen == 'play' and stage_entry is None:
+                if screen == 'play' and stage_entry is None and boss_selector is None:
                     horizontal = int(SDLK_RIGHT in pressed) - int(SDLK_LEFT in pressed)
                     world.step(Motion(horizontal, pending_stairs, pending_jump), pending_attack)
                 pending_stairs = 0
@@ -145,6 +165,8 @@ def main():
             view.draw(world, screen, menu)
             if stage_entry is not None:
                 view.draw_stage_selector(stage_entry)
+            if boss_selector is not None:
+                view.draw_boss_selector(boss_selector)
             update_canvas()
             delay(0.001)
     finally:

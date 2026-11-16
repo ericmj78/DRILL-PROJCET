@@ -4,10 +4,10 @@
 """
 from pico2d import (
     SDL_BUTTON_LEFT, SDL_KEYDOWN, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION,
-    SDLK_DOWN, SDLK_ESCAPE, SDLK_LEFT, SDLK_RETURN, SDLK_RIGHT, SDLK_SPACE, SDLK_UP,
+    SDLK_0, SDLK_9, SDLK_DOWN, SDLK_ESCAPE, SDLK_LEFT, SDLK_RETURN, SDLK_RIGHT, SDLK_SPACE, SDLK_UP, SDLK_b,
 )
 
-from stages import STAGES
+from stages import BOSS_KINDS, STAGES
 
 MAIN = (
     ('start', '게임 시작'), ('stages', '스테이지 선택'), ('controls', '조작법'),
@@ -17,10 +17,34 @@ PAGE_TITLES = {'stages': '스테이지 선택', 'controls': '조작법', 'settin
 CONTROLS = (
     ('← →', '이동'), ('Space', '점프'), ('↑ ↓', '사다리 · 승강기'), ('C', '분신 녹화 시작 / 재현'),
     ('Backspace', '녹화 취소'), ('A / S', '베기 / 찌르기'), ('E', '레버'), ('0 – 4', '무기 바꾸기'),
-    ('R', '스테이지 다시 시작'), ('P', '스테이지 바로 이동'), ('Esc', '타이틀 화면으로'),
+    ('R', '스테이지 다시 시작'), ('P', '스테이지 바로 이동'), ('B', '보스방으로 바로 이동'), ('Esc', '타이틀 화면으로'),
 )
 BACK = ('back', '뒤로', (90, 70, 260, 112))
 MOVES = {SDLK_UP: (0, -1), SDLK_DOWN: (0, 1), SDLK_LEFT: (-1, 0), SDLK_RIGHT: (1, 0)}
+
+
+class BossSelector:
+    def __init__(self):
+        self.stages = [i for i, stage in enumerate(STAGES)
+                       if any(enemy.kind in BOSS_KINDS for enemy in stage.enemies)]
+        self.index = 0
+
+    def handle(self, key):
+        if key in (SDLK_ESCAPE, SDLK_b):
+            return 'cancel'
+        if not self.stages:
+            return None
+        if key in (SDLK_UP, SDLK_LEFT):
+            self.index = (self.index - 1) % len(self.stages)
+        elif key in (SDLK_DOWN, SDLK_RIGHT):
+            self.index = (self.index + 1) % len(self.stages)
+        elif key in (SDLK_RETURN, SDLK_SPACE):
+            return self.stages[self.index]
+        elif SDLK_0 < key <= SDLK_9:
+            selected = key - SDLK_0 - 1
+            if selected < len(self.stages):
+                return self.stages[selected]
+        return None
 
 
 class TitleMenu:

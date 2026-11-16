@@ -90,6 +90,7 @@ class Enemy:
     skill_time: float = 0
     skill_cooldown: float = 0
     skill_index: int = 0
+    boss_engaged: bool = False  # 보스가 본체를 한 번 발견했는지
 
 
 def approach_direction(start: float, end: float) -> int:
@@ -122,6 +123,8 @@ class World:
         self.attack_age = 9.0   # 마지막 공격을 시작한 뒤 흐른 시간. 화면의 검기 이펙트가 쓴다.
         self.hit_sparks = []    # 공격이 적에게 맞은 자리 [x, 층, 지난 시간]
         self.boss_effects = []  # 보스 스킬 이펙트 (boss_skills.Effect)
+        self.gravity_field = None
+        self.shake = 0.0        # 화면을 흔드는 남은 시간
         self.time = 0.0
         self.result = 'playing'
         self.message = ''
@@ -243,6 +246,7 @@ class World:
         self.attack_cooldown = max(0, self.attack_cooldown - STEP)
         self.attack_flash = max(0, self.attack_flash - STEP)
         self.attack_age += STEP
+        self.shake = max(0, self.shake - STEP)
         for text in self.damage_texts:
             text[2] += STEP
         self.damage_texts = [text for text in self.damage_texts if text[2] < 0.8]
@@ -253,9 +257,12 @@ class World:
             self.attack_hit_pending = False
             self._apply_attack()
         player_x, player_floor = self.player.x, self.player.floor
-        if not self.lift_riding:
+        if not self.lift_riding and not (self.gravity_field and self.gravity_field.captured):
             self._move(self.player, motion)
             self._block_body(player_x, player_floor)
+        boss_skills.update_gravity(self, motion.horizontal)
+        if self.result != 'playing':
+            return
         for hazard in self.stage.hidden_hazards:
             # 분신의 빛이 닿지 않은 함정은 뛰어넘을 수도 없다. 무작정 점프로는 통과하지 못한다.
             airborne = self.player.jump_time > 0 and self.hazard_lit(hazard)
@@ -303,6 +310,14 @@ class World:
                     self.notify('보스를 처치하면 출구가 열립니다.')
             else:
                 self.result = 'cleared'
+
+    def warp_to_boss(self):
+        """본체를 보스가 있는 층의 입구(그 층으로 올라오는 사다리·승강기)로 옮긴다. B 키용."""
+        boss = next(enemy for enemy in self.enemies if enemy.spawn.kind in BOSS_KINDS)
+        floor = boss.actor.floor
+        entries = [stair.x for stair in self.stage.stairs + self.stage.elevators if stair.lower == floor - 1]
+        self.player.x = entries[0] if entries else boss.actor.x - 400
+        self.player.floor = floor
 
     def hazard_lit(self, hazard: Point) -> bool:
         return (self.echo is not None and self.echo.actor.floor == hazard.floor
@@ -413,6 +428,12 @@ class World:
                 actor.floor == gate.door.floor and abs(actor.x - gate.door.x) < GATE_HALF_WIDTH + ACTOR_RADIUS
                 for actor in occupants
             )
+            # Stage 1: keep the first gate open after the player has passed it,
+            # so the player can return to the second plate if the echo runs out.
+            if (self.index == 0 and gate.label == 'A' and state.open
+                    and self.player.floor == gate.door.floor
+                    and self.player.x >= gate.door.x + GATE_HALF_WIDTH + ACTOR_RADIUS):
+                state.latched = True
             state.open = state.latched or state.pressed or state.grace > 0 or (state.open and occupied)
 
     def _remove_echo(self):
@@ -561,7 +582,20 @@ class World:
         def within_chase_area(target):
             return left - ENEMY_CHASE_MARGIN <= target.x <= right + ENEMY_CHASE_MARGIN
 
-        if enemy.target is not None:
+        is_boss = enemy.spawn.kind in BOSS_KINDS
+        same_floor = actor.floor == self.player.floor
+        if is_boss:
+            if not same_floor:
+                enemy.boss_engaged = False
+            elif self._clear_line(actor, self.player, sight):
+                enemy.boss_engaged = True
+        boss_duel = is_boss and same_floor and enemy.boss_engaged
+        if boss_duel:
+            # 한 번 발견한 본체는 같은 층에서 멀어져도 계속 추적한다.
+            enemy.target = self.player
+            enemy.last_seen = self.player.x
+            enemy.unseen = 0
+        elif enemy.target is not None:
             if abs(actor.x - enemy.target.x) > sight + 100 or not within_chase_area(enemy.target):
                 enemy.target = None
                 enemy.windup = 0
