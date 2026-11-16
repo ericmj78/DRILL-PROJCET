@@ -1,0 +1,19 @@
+{
+ "meta": {
+  "pixelfx": {
+   "id": "nature/boulder (rock only)",
+   "fps": 1,
+   "loop": true,
+   "frames": 1,
+   "frameSize": [
+    24,
+    18
+   ],
+   "pivot": [
+    12,
+    18
+   ],
+   "columns": 1
+  }
+ }
+}
