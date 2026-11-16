@@ -34,6 +34,8 @@ python main.py
 | `stages.py` | 스테이지 제목·힌트, 시작점, 출구, 발판과 문, 사다리, 적의 배치와 수치 |
 | `world.py` | 분신 녹화·재현, 충돌, 버튼 상태, 전투와 적의 추적 |
 | `view.py` / `assets/` | 화면 배치, 표시 문구와 이미지 |
+| `monster_attack.py` / `player_attack.py` / `assets/attack_fx/` | 몬스터와 본체의 공격 자세, 타격 이펙트, 타이밍 |
+| `boss_skills.py` | 보스 스킬의 종류, 예고·발동·빈틈 시간, 사거리, 피해 범위 |
 | `animation.py` / `assets/walk_frames.json` | 걷기 속도에 따른 자세 전환과 스프라이트 영역 |
 | `main.py` | 조작키와 게임 시작·재시작·다음 스테이지 처리 |
 
