@@ -1,7 +1,7 @@
 from time import perf_counter
 
 from pico2d import (
-    SDL_KEYDOWN, SDL_KEYUP, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_BACKSPACE, SDLK_c,
+    SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_BACKSPACE, SDLK_c,
     SDLK_DOWN, SDLK_e, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
     SDLK_s, SDLK_SPACE, SDLK_UP, clear_canvas, close_canvas, delay, get_events,
     hide_lattice, open_canvas, update_canvas,
@@ -9,6 +9,7 @@ from pico2d import (
 from pico2d import pico2d as canvas
 
 from stages import STAGES, STEP
+from title_menu import TitleMenu
 from view import HEIGHT, WIDTH, View
 from world import Motion, World
 
@@ -29,6 +30,7 @@ def main():
         view = View()
         world = World()
         screen = 'intro'
+        menu = TitleMenu()
         pressed = set()
         pending_stairs = 0
         pending_jump = False
@@ -47,6 +49,27 @@ def main():
                     return
                 if event.type == SDL_KEYUP:
                     pressed.discard(event.key)
+                if screen == 'intro' and stage_entry is None:
+                    if event.type in (SDL_MOUSEMOTION, SDL_MOUSEBUTTONDOWN):
+                        event.y = HEIGHT - 1 - event.y  # pico2d는 마우스 y를 위에서부터 센다.
+                    action = menu.handle(event)
+                    if action == 'quit':
+                        return
+                    if action == 'start' or action and action.startswith('stage:'):
+                        index = int(action.split(':')[1]) if ':' in action else 0
+                        world = World(index, weapon_index=world.weapon_index)
+                        screen = 'play'
+                        pressed.clear()
+                        accumulator = 0.0
+                    elif action == 'back':
+                        menu.open('main')
+                    elif action == 'fullscreen':
+                        menu.fullscreen = not menu.fullscreen
+                        canvas.SDL_SetWindowFullscreen(
+                            canvas.window, canvas.SDL_WINDOW_FULLSCREEN_DESKTOP if menu.fullscreen else 0)
+                    elif action:
+                        menu.open(action)
+                    continue
                 if event.type != SDL_KEYDOWN:
                     continue
                 key = event.key
@@ -74,10 +97,9 @@ def main():
                     accumulator = 0.0
                     continue
                 if key == SDLK_ESCAPE:
-                    return
-                if screen == 'intro':
-                    if key == SDLK_RETURN:
-                        screen = 'play'
+                    screen = 'intro'
+                    menu.open('main')
+                    pressed.clear()
                     continue
                 if key == SDLK_r or (key == SDLK_RETURN and world.result == 'cleared'):
                     index = world.index if key == SDLK_r else (world.index + 1) % len(STAGES)
@@ -120,7 +142,7 @@ def main():
                 accumulator -= STEP
 
             clear_canvas()
-            view.draw(world, screen)
+            view.draw(world, screen, menu)
             if stage_entry is not None:
                 view.draw_stage_selector(stage_entry)
             update_canvas()

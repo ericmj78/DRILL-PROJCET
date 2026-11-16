@@ -14,6 +14,7 @@ import boss_skills
 from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
 from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
+from title_menu import CONTROLS, PAGE_TITLES
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, RIGHT, STAGES, STEP, WEAPONS
 from world import JUMP_DURATION
 
@@ -173,10 +174,10 @@ class View:
         self.enemies['magic_book'] = load_asset('monster_concepts/magic-book-sprite.png')
         self.enemies['potion_slime'] = load_asset('monster_concepts/potion-slime-sprite.png')
 
-    def draw(self, world, screen):
+    def draw(self, world, screen, menu=None):
         if screen == 'intro':
             self.background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
-            self._draw_title()
+            self._draw_title(menu)
             return
         if world is not self.current_world:
             self.current_world = world
@@ -714,16 +715,49 @@ class View:
         else:
             self.small.draw(33, 18, 'P 스테이지 바로 이동', CYAN)
 
-    def _draw_title(self):
+    def _draw_title(self, menu):
         height = WIDTH * self.title_art.h / self.title_art.w
         self.title_art.draw(WIDTH / 2, HEIGHT / 2, WIDTH, height)
-        line(62, 473, 147, 473, CYAN)
-        self.small.draw(62, 446, '멈춘 시간의 잔향', CYAN)
-        self.display.draw(58, 390, 'ECHO ESCAPE', WHITE)
-        self.body.draw(62, 327, '분신에게 길과 시간을 맡기고', MUTED)
-        self.body.draw(62, 298, '본체로 지하 감옥을 탈출하세요.', MUTED)
-        box(62, 216, 295, 263, (23, 60, 71))
-        self.body.draw(78, 240, 'ENTER   탐험 시작', CYAN)
+        pulse = (sin(perf_counter() * 4) + 1) / 2
+        if menu.page == 'main':
+            line(62, 523, 147, 523, CYAN)
+            self.small.draw(62, 496, '멈춘 시간의 잔향', CYAN)
+            self.display.draw(58, 440, 'ECHO ESCAPE', WHITE)
+            self.body.draw(62, 377, '분신에게 길과 시간을 맡기고', MUTED)
+            self.body.draw(62, 348, '본체로 지하 감옥을 탈출하세요.', MUTED)
+        else:
+            box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 215))
+            line(90, 640, 175, 640, CYAN)
+            self.heading.draw(90, 610, PAGE_TITLES[menu.page], WHITE)
+        if menu.page == 'controls':
+            for row, (keys, what) in enumerate(CONTROLS):
+                y = 548 - row * 36
+                box(90, y - 14, 230, y + 14, PANEL)
+                self.body.draw(102, y, keys, CYAN)
+                self.body.draw(252, y, what, WHITE)
+        for index, (action, label, (left, bottom, right, top)) in enumerate(menu.buttons()):
+            chosen = index == menu.index
+            middle = (bottom + top) / 2
+            if menu.page == 'main':
+                # 고른 줄만 띠와 막대로 강조하고 글자가 살짝 숨 쉬듯 움직인다.
+                if chosen:
+                    box(left, bottom, right, top, (23, 60, 71))
+                    box(left, bottom, left + 4, top, CYAN)
+                self.body.draw(left + 20 + 4 * pulse * chosen, middle, label, CYAN if chosen else MUTED)
+                continue
+            box(left, bottom, right, top, (23, 60, 71) if chosen else PANEL)
+            box(left, bottom, right, top, CYAN if chosen else LINE, filled=False)
+            if action.startswith('stage:'):
+                number, name = label.split(maxsplit=1)
+                self.display.draw(left + 16, top - 40, number, CYAN if chosen else WHITE)
+                self.small.draw(left + 16, bottom + 24, name, WHITE if chosen else MUTED)
+            elif action == 'fullscreen':
+                self.body.draw(left + 20, middle, label, WHITE)
+                value = '전체 화면' if menu.fullscreen else '창 모드'
+                self.body.draw(right - 170, middle, f'◀  {value}  ▶', CYAN if chosen else GOLD)
+            else:
+                self.body.draw(left + 20, middle, label, CYAN if chosen else MUTED)
+        self.small.draw(62, 26, '↑ ↓ ← →  선택     Enter  결정     Esc  뒤로     마우스로 가리키고 클릭', MUTED)
 
     def draw_stage_selector(self, entry):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
