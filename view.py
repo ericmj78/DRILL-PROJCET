@@ -164,7 +164,11 @@ class View:
         self.player = load_asset('player.png')
         self.player_jump = load_asset('player_jump_sheet.png')
         self.jailer_chain_slam = load_asset('monster_concepts/prison-jailer-long-chain-slam-concept.png')
-        self.jester_walk = load_asset('monster_concepts/broken-jester-walk.png')
+        self.jester_walk = load_asset('monster_concepts/broken-jester-walk-16.png')
+        self.knight_sheets = {
+            name: load_asset(f'monster_concepts/echo-knight-{name}-sheet.png')
+            for name in ('walk', 'attack', 'charge', 'orb', 'bolts')
+        }
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
@@ -631,7 +635,12 @@ class View:
             skill_phase = boss_skills.phase(enemy)
             if skill_phase is not None:
                 pose = skill_pose(enemy.spawn.kind, *skill_phase)
-            if enemy.spawn.kind in late_monster_motion.KINDS:
+            if enemy.spawn.kind == 'echo_knight':
+                self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
+                if skill_phase is None and pose is not None:
+                    draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
+                                       enemy.windup, enemy.recovery)
+            elif enemy.spawn.kind in late_monster_motion.KINDS:
                 image = self.jester_walk if enemy.spawn.kind == 'broken_jester' else self.enemies[enemy.spawn.kind]
                 late_monster_motion.draw(image, screen_enemy.actor, y, kind.size, world.time,
                                          enemy.spawn.kind, pose, tint)
@@ -656,9 +665,6 @@ class View:
                 draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
             elif enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
-            elif enemy.spawn.kind == 'echo_knight':
-                self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size,
-                             world.time, feet=0.50, faces=-1, tint=tint)
             elif enemy.spawn.kind in ('magic_book', 'potion_slime'):
                 image = self.enemies[enemy.spawn.kind]
                 bob = 5 + sin(world.time * 3) * 4 if enemy.spawn.kind == 'magic_book' else 0
@@ -739,13 +745,18 @@ class View:
             progress = 1 - world.attack_flash / world.attack_duration
             body = copy(player)
             body.x += player.facing * player_attack.weapon_pose(world.attack_kind, progress)[3]
-            self.player_attack.draw(body, floor, progress, opacity=player_alpha)
+            blend = player_attack.body_frames(progress) if world.weapon_index == 2 else None
+            height = 91 if world.weapon_index == 2 else None
+            self.player_attack.draw(body, floor, progress, opacity=player_alpha, blend_frames=blend, height=height)
             if world.weapon_index:
                 for past, strength in player_attack.trail(progress):
                     self._draw_weapon(player, world.weapon_index, floor, past, round(player_alpha * strength), world.attack_kind)
                 self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha, world.attack_kind)
         else:
             self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
+            if world.weapon_index == 2:
+                self._draw_weapon(player, 2, floor, 0, player_alpha, 'slash',
+                                  pose=player_attack.held_sword_pose(world.player))
         player_attack.draw_attack_effect(
             self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
             WEAPONS[world.weapon_index].reach, player.x, floor, player.facing)
@@ -765,6 +776,37 @@ class View:
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
 
+    def _draw_echo_knight(self, enemy, floor_y, size, skill_phase, tint):
+        actor = enemy.actor
+        if skill_phase is not None:
+            name = enemy.skill
+            phase, progress = skill_phase
+            if phase == 'telegraph':
+                frame = min(2, int(progress * 3))
+            elif phase == 'active':
+                frame = 3 + min(2, int(progress * 3))
+            else:
+                frame = 6 + min(1, int(progress * 2))
+        elif enemy.windup > 0:
+            name = 'attack'
+            frame = min(3, max(0, int((1 - enemy.windup / 0.31) * 4)))
+        elif enemy.recovery > 0:
+            name = 'attack'
+            frame = 4 + min(3, max(0, int((1 - enemy.recovery / 0.65) * 4)))
+        else:
+            name = 'walk'
+            frame = int(actor.walk_distance / 9) % 16 if actor.moving else 0
+
+        image = self.knight_sheets[name]
+        columns, rows = (4, 4) if name == 'walk' else (4, 2)
+        width, height = image.w // columns, image.h // rows
+        region = ((frame % columns) * width, (frame // columns) * height, width, height)
+        draw_width = size * width / height
+        canvas.SDL_SetTextureColorMod(image.texture, *tint)
+        draw_region(image, region, actor.x - draw_width / 2, floor_y, draw_width, size,
+                    flip=actor.facing != -1)
+        canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+
     def _screen_actor(self, actor):
         screen_actor = copy(actor)
         screen_actor.x -= self.camera_x
@@ -777,10 +819,13 @@ class View:
         end = self.floor_y[actor.elevator_target]
         return start + (end - start) * abs(actor.elevator_offset)
 
-    def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind):
+    def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind, pose=None):
         region, height, grip = WEAPON_SPRITES[index]
         width = round(height * region[2] / region[3])
-        hand_x, hand_y, angle, lunge = player_attack.weapon_pose(attack_kind, progress)
+        if pose is None:
+            pose = (player_attack.sword_pose(attack_kind, progress) if index == 2
+                    else player_attack.weapon_pose(attack_kind, progress))
+        hand_x, hand_y, angle, lunge = pose
         grip_y = round(height * grip)
         center = canvas.SDL_Point(width // 2, grip_y)
         left = actor.x + actor.facing * (hand_x + lunge) - center.x

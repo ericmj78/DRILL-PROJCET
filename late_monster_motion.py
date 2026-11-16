@@ -10,12 +10,12 @@ KINDS = frozenset(('time_thief', 'cursed_lantern', 'broken_jester'))
 def draw(image, actor, floor_y, size, time, kind, pose=None, tint=(255, 255, 255)):
     """광대는 걸음 시트를, 시간 도둑과 등불은 각기 다른 움직임을 쓴다."""
     if kind == 'broken_jester':
-        cell_w, cell_h = image.w // 4, image.h // 2
-        frame = int(actor.walk_distance / 14) % 8 if actor.moving else 0
+        cell_w, cell_h = image.w // 4, image.h // 4
+        frame = int(actor.walk_distance / 7) % 16 if actor.moving else 0
         source = canvas.SDL_Rect((frame % 4) * cell_w, (frame // 4) * cell_h, cell_w, cell_h)
         faces_right = True
-        bob = abs(sin(actor.walk_distance / 11)) * 2 if actor.moving else sin(time * 2) * 1.2
-        tilt = sin(actor.walk_distance / 20) * 2 if actor.moving else sin(time * 1.8)
+        bob = 0 if actor.moving else sin(time * 2) * 1.2
+        tilt = 0 if actor.moving else sin(time * 1.8)
     else:
         source = canvas.SDL_Rect(0, 0, image.w, image.h)
         cell_w, cell_h = image.w, image.h
