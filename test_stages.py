@@ -7,7 +7,7 @@ SOLUTIONS는 막혔을 때 읽는 공략집이기도 하다.
 import sys
 
 import boss_skills
-from stages import STAGES, STEP
+from stages import BOSS_KINDS, STAGES, STEP
 from world import Motion, World
 
 
@@ -96,9 +96,13 @@ class Bot:
         me = self.me
         skill = boss_skills.current(foe)
         # 돌진과 충격파는 예고가 끝나는 순간에 맞춰 뛴다.
-        if skill and skill.name in ('charge', 'quake') and skill.telegraph - 0.08 <= foe.skill_time and me.jump_time == 0 \
+        if skill and skill.name == 'charge' and skill.telegraph - 0.08 <= foe.skill_time and me.jump_time == 0 \
                 and foe.skill_time < skill.telegraph + skill.active:
             self.tick(jump=True)
+            return True
+        if skill and skill.name == 'chain' and foe.skill_time < skill.telegraph + skill.active:
+            # 쇠사슬은 닿는 거리 밖으로 물러난다.
+            self.tick(-1 if foe.actor.x > me.x else 1)
             return True
         for effect in self.w.boss_effects:
             if effect.hit_at is None or effect.floor != me.floor or effect.age > effect.hit_at + effect.hit_for:
@@ -109,7 +113,7 @@ class Bot:
                 if me.jump_time == 0 and abs(distance) < 70:
                     self.tick(jump=True)
                     return True
-            elif abs(distance) < effect.radius + 30:
+            elif abs(distance) < effect.radius + 12:
                 # 낙뢰 문양에서는 걸어서 벗어난다.
                 self.tick(-1 if distance > 0 else 1)
                 return True
@@ -150,6 +154,8 @@ def stage_1(b):
     b.go(430)      # B 발판: 본체가 B 문까지 달릴 동안
     b.wait(2.6)
     b.rec()
+    b.go(1950, slash=True)
+    b.up()
     b.go(2100, slash=True)
 
 
@@ -171,6 +177,8 @@ def stage_2(b):
     b.go(1300)
     b.wait(3.5)
     b.rec()
+    b.go(1950, slash=True)
+    b.up()
     b.go(2100, slash=True)
 
 
@@ -226,6 +234,9 @@ def stage_4(b):
     b.until(lambda w: w.sequence_unlocked, limit=6)
     b.go(1890)
     b.kill('witch')
+    b.go(1980)
+    for _ in range(3):
+        b.up()
     b.go(2100)
 
 
@@ -245,6 +256,9 @@ def stage_5(b):
     b.go(800)
     b.kill('magic_armor')
     b.kill('potion_slime')
+    b.go(180)
+    b.up()
+    b.up()
     b.go(104)
 
 
@@ -270,6 +284,9 @@ def stage_6(b):
     b.go(1850)
     b.down()
     b.kill('witch')
+    b.go(2000)
+    for _ in range(3):
+        b.up()
     b.go(2100)
 
 
@@ -447,8 +464,22 @@ def check_balance():
     assert (late.health, late.result) == (0, 'defeated')
 
 
+def check_boss_warp():
+    for index, stage in enumerate(STAGES):
+        if not any(spawn.kind in BOSS_KINDS for spawn in stage.enemies):
+            continue
+        w = World(index)
+        w.warp_to_boss()
+        boss = next(e for e in w.enemies if e.spawn.kind in BOSS_KINDS)
+        assert w.player.floor == boss.actor.floor and abs(w.player.x - boss.actor.x) > 200, (stage.title, w.player)
+        for _ in range(30):                 # 도착하자마자 맞거나 끼지 않는다.
+            w.step(Motion())
+        assert w.result == 'playing' and w.health == w.max_health, stage.title
+
+
 def main():
     check_balance()
+    check_boss_warp()
     print('OK   밸런스 표')
     failed = False
     for index, stage in enumerate(STAGES):
