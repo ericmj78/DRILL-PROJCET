@@ -6,7 +6,18 @@ FLOOR_Y = (156, 320, 484)
 STEP = 1 / 60
 MOVE_SPEED = 230
 MAX_RECORD_SECONDS = 9
-MAX_HEALTH = 3
+# 본체 레벨 (BALANCE.md). 레벨 1~9에서 다음 레벨까지 필요한 경험치이며 최대 레벨은 10이다.
+LEVEL_UP_XP = (30, 45, 60, 80, 100, 120, 140, 160, 180)
+HAZARD_RATIO = 0.2      # 숨은 함정은 최대 체력의 20%를 깎는다.
+LATE_STAGE_SCALE = 1.6  # 8~10스테이지에 다시 나오는 초반 몬스터의 체력·피해 배율
+
+
+def max_health(level: int) -> int:
+    return 25 + 3 * (level - 1)
+
+
+def attack_power(level: int) -> int:
+    return 4 + (level - 1)
 ATTACK_RANGE = 86
 ATTACK_COOLDOWN = 0.32
 DOOR_GRACE = 0.18
@@ -80,14 +91,14 @@ class Weapon:
     name: str
     reach: int
     cooldown: float
-    damage: int = 1
+    bonus: int = 0  # 피해 = 공격력 + 무기 보정 + 공격 보정(베기 +1)
 
 
 WEAPONS = (
-    Weapon('맨손', ATTACK_RANGE, ATTACK_COOLDOWN),
-    Weapon('단검', 70, 0.23),
+    Weapon('맨손', ATTACK_RANGE, ATTACK_COOLDOWN, bonus=-1),
+    Weapon('단검', 70, 0.23, bonus=-2),
     Weapon('한손검', 99, 0.38),
-    Weapon('전투 망치', 91, 0.62, damage=2),
+    Weapon('전투 망치', 91, 0.62, bonus=3),
     Weapon('마력 지팡이', 113, 0.46),
 )
 
@@ -100,20 +111,23 @@ class EnemyKind:
     attack_range: int
     health: int | None  # None이면 기본 공격으로 처치할 수 없는 적이다.
     size: int
+    damage: int = 0          # 본체가 맞을 때 깎이는 체력
+    xp: int = 0              # 처치했을 때 얻는 경험치
+    damage_ratio: float = 0  # 벨 수 없는 적은 본체 최대 체력의 이 비율만큼 깎는다.
 
 
 ENEMY_KINDS = {
-    'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, None, 115),
-    'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, None, 105),
-    'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 2, 86),
-    'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 2, 100),
-    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 55, 12, 155),
-    'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 2, 76),
-    'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 3, 85),
-    'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 4, 115),
-    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, None, 115),
-    'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 4, 112),
-    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 12, 150),
+    'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, None, 115, damage_ratio=0.4),
+    'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, None, 105, damage_ratio=0.5),
+    'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 12, 86, damage=8, xp=12),
+    'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 10, 100, damage=7, xp=10),
+    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 260, damage=8, xp=80),
+    'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
+    'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
+    'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 32, 115, damage=11, xp=20),
+    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, None, 115, damage_ratio=0.4),
+    'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 30, 112, damage=10, xp=22),
+    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 230, damage=11, xp=120),
 }
 
 BOSS_KINDS = frozenset(('jailer_boss', 'grand_witch'))
@@ -147,13 +161,15 @@ class Stage:
     lift: BalanceLift | None = None
     echo_seconds: float = MAX_RECORD_SECONDS  # 이 스테이지에서 분신 한 번에 녹화할 수 있는 시간
     elevators: tuple[Stair, ...] = ()
+    enemy_scale: float = 1.0  # 몬스터 체력·피해 배율
 
 
 STAGES = (
     Stage(
         '01  잔향의 문',
-        'B 발판은 A 문보다 앞에 있습니다. 분신 한 번에 A에서 기다렸다가 B로 옮겨 가도록 녹화하세요.',
-        1, Point(112, 0), Point(2100, 0),
+        'A 문을 지나면 문이 열린 상태로 유지됩니다. B 발판을 누르도록 분신을 녹화하세요.',
+        2, Point(112, 0), Point(2100, 1),
+        elevators=(Stair(1950, 0),),
         gates=(
             Gate('A', Point(267, 0), Point(740, 0)),
             Gate('B', Point(430, 0), Point(1400, 0)),
@@ -167,8 +183,9 @@ STAGES = (
     Stage(
         '02  사냥꾼의 시야',
         '뿔짐승은 벨 수 없습니다. 분신을 왼쪽으로 달리게 해 유인하고, 짐승이 지나간 뒤 내려가세요.',
-        2, Point(111, 1), Point(2100, 1),
+        3, Point(111, 1), Point(2100, 2),
         stairs=(Stair(659, 0), Stair(1200, 0)),
+        elevators=(Stair(1950, 1),),
         enemies=(
             EnemySpawn('beast', Point(900, 0), (720, 1100)),
             EnemySpawn('watcher', Point(1650, 1), (1550, 1750)),
@@ -194,7 +211,7 @@ STAGES = (
             EnemySpawn('warden', Point(1500, 2), (1500, 1500)),
             EnemySpawn('crawler', Point(1000, 3), (900, 1100)),
             EnemySpawn('watcher', Point(1500, 3), (1400, 1600)),
-            EnemySpawn('jailer_boss', Point(1980, 4), (1910, 2040)),
+            EnemySpawn('jailer_boss', Point(1120, 4), (1050, 1190)),
         ),
         walls=(Point(1100, 1),),
         guard=Point(1500, 2),
@@ -203,7 +220,8 @@ STAGES = (
     Stage(
         '04  반대편 발판',
         '감지 지점은 1→2→3 순서로만 밟아야 합니다. 공중에서는 감지되지 않으니 점프를 녹화하세요.',
-        1, Point(340, 0), Point(2100, 0),
+        4, Point(340, 0), Point(2100, 3),
+        elevators=(Stair(1980, 0), Stair(1980, 1), Stair(1980, 2)),
         gates=(Gate('A', Point(160, 0), Point(900, 0)),),
         enemies=(
             EnemySpawn('magic_book', Point(700, 0), (620, 780)),
@@ -217,7 +235,8 @@ STAGES = (
     Stage(
         '05  아래층의 열쇠',
         'A 발판의 분신은 갑옷의 미끼도 됩니다. 문을 지나 갑옷이 격리실에 들어온 순간 E 레버를 당기세요.',
-        2, Point(2065, 1), Point(104, 1),
+        4, Point(2065, 1), Point(104, 3),
+        elevators=(Stair(180, 1), Stair(180, 2)),
         stairs=(Stair(2030, 0), Stair(1350, 0)),  # 1350: 실패했을 때 레버 옆에서 미끼를 다시 보내는 길
         gates=(Gate('A', Point(1700, 0), Point(1420, 1)),),
         enemies=(
@@ -232,7 +251,8 @@ STAGES = (
     Stage(
         '06  시야 밖의 길',
         '분신이 아래층을 지나는 동안만 위층 발판이 생깁니다. 뿔짐승이 멀리 갔을 때 분신을 보내세요.',
-        2, Point(310, 0), Point(2100, 0),
+        4, Point(310, 0), Point(2100, 3),
+        elevators=(Stair(2000, 0), Stair(2000, 1), Stair(2000, 2)),
         stairs=(Stair(320, 0), Stair(680, 0), Stair(1250, 0), Stair(1850, 0)),
         gates=(Gate('A', Point(1000, 0), Point(1150, 1)),),
         enemies=(
@@ -263,7 +283,7 @@ STAGES = (
             EnemySpawn('potion_slime', Point(1450, 2), (1380, 1520)),
             EnemySpawn('magic_armor', Point(1250, 3), (1180, 1320)),
             EnemySpawn('witch', Point(1650, 3), (1580, 1720)),
-            EnemySpawn('grand_witch', Point(1970, 4), (1900, 2040)),
+            EnemySpawn('grand_witch', Point(1120, 4), (1050, 1190)),
         ),
         lift=BalanceLift(Point(1450, 0), Point(1300, 0)),
         echo_seconds=3.5,
@@ -283,6 +303,7 @@ STAGES = (
         ),
         sync_gate=SyncGate(Point(800, 1), Point(800, 0), Point(500, 1)),
         echo_seconds=4.5,
+        enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
         '09  되돌아가는 발자국',
@@ -300,6 +321,7 @@ STAGES = (
         ),
         hidden_hazards=(Point(1300, 2), Point(1520, 2), Point(1740, 2)),
         echo_seconds=4.5,
+        enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
         '10  마지막 잔향',
@@ -318,5 +340,6 @@ STAGES = (
         hidden_hazards=(Point(1700, 2), Point(1900, 2)),
         guard=Point(1500, 2),
         echo_seconds=4,
+        enemy_scale=LATE_STAGE_SCALE,
     ),
 )

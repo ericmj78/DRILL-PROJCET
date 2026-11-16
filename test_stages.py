@@ -7,7 +7,7 @@ SOLUTIONS는 막혔을 때 읽는 공략집이기도 하다.
 import sys
 
 import boss_skills
-from stages import STAGES, STEP
+from stages import BOSS_KINDS, STAGES, STEP
 from world import Motion, World
 
 
@@ -96,9 +96,13 @@ class Bot:
         me = self.me
         skill = boss_skills.current(foe)
         # 돌진과 충격파는 예고가 끝나는 순간에 맞춰 뛴다.
-        if skill and skill.name in ('charge', 'quake') and skill.telegraph - 0.08 <= foe.skill_time and me.jump_time == 0 \
+        if skill and skill.name == 'charge' and skill.telegraph - 0.08 <= foe.skill_time and me.jump_time == 0 \
                 and foe.skill_time < skill.telegraph + skill.active:
             self.tick(jump=True)
+            return True
+        if skill and skill.name == 'chain' and foe.skill_time < skill.telegraph + skill.active:
+            # 쇠사슬은 닿는 거리 밖으로 물러난다.
+            self.tick(-1 if foe.actor.x > me.x else 1)
             return True
         for effect in self.w.boss_effects:
             if effect.hit_at is None or effect.floor != me.floor or effect.age > effect.hit_at + effect.hit_for:
@@ -109,7 +113,7 @@ class Bot:
                 if me.jump_time == 0 and abs(distance) < 70:
                     self.tick(jump=True)
                     return True
-            elif abs(distance) < effect.radius + 30:
+            elif abs(distance) < effect.radius + 12:
                 # 낙뢰 문양에서는 걸어서 벗어난다.
                 self.tick(-1 if distance > 0 else 1)
                 return True
@@ -150,6 +154,8 @@ def stage_1(b):
     b.go(430)      # B 발판: 본체가 B 문까지 달릴 동안
     b.wait(2.6)
     b.rec()
+    b.go(1950, slash=True)
+    b.up()
     b.go(2100, slash=True)
 
 
@@ -171,6 +177,8 @@ def stage_2(b):
     b.go(1300)
     b.wait(3.5)
     b.rec()
+    b.go(1950, slash=True)
+    b.up()
     b.go(2100, slash=True)
 
 
@@ -226,6 +234,9 @@ def stage_4(b):
     b.until(lambda w: w.sequence_unlocked, limit=6)
     b.go(1890)
     b.kill('witch')
+    b.go(1980)
+    for _ in range(3):
+        b.up()
     b.go(2100)
 
 
@@ -245,6 +256,9 @@ def stage_5(b):
     b.go(800)
     b.kill('magic_armor')
     b.kill('potion_slime')
+    b.go(180)
+    b.up()
+    b.up()
     b.go(104)
 
 
@@ -270,6 +284,9 @@ def stage_6(b):
     b.go(1850)
     b.down()
     b.kill('witch')
+    b.go(2000)
+    for _ in range(3):
+        b.up()
     b.go(2100)
 
 
@@ -423,7 +440,47 @@ def rush(index):
     return bot.w.result
 
 
+def check_balance():
+    """BALANCE.md의 레벨 표와 피해 공식이 코드와 맞는지 확인한다."""
+    w = World(0)
+    assert (w.level, w.max_health, w.health, w.xp_progress()) == (1, 25, 25, (0, 30))
+    for xp, level, top in ((29, 1, 25), (30, 2, 28), (75, 3, 31), (575, 8, 46), (915, 10, 52), (5000, 10, 52)):
+        w.xp = xp
+        assert (w.level, w.max_health) == (level, top), (xp, w.level, w.max_health)
+    assert w.xp_progress()[1] == 0                      # 최대 레벨
+    w = World(0)                                        # 여섯 다리 괴물: 체력 10, 피해 7
+    crawler = w.enemies[0]
+    assert (crawler.health, w.enemy_damage(crawler)) == (10, 7)
+    w.player.x, w.player.facing, crawler.actor.x = 500, 1, 560
+    w.weapon_index, w.attack_kind = 2, 'slash'          # 한손검 베기 1레벨: 4 + 0 + 1 = 5
+    w._apply_attack()
+    assert crawler.health == 5, crawler.health
+    late = World(9)                                     # 후반 강화 ×1.6
+    watcher = next(e for e in late.enemies if e.spawn.kind == 'watcher')
+    assert (watcher.health, late.enemy_damage(watcher)) == (19, 13)
+    beast = next(e for e in late.enemies if e.spawn.kind == 'beast')
+    assert late.enemy_damage(beast) == 10                # 25의 40%
+    late.hurt(99, '테스트')
+    assert (late.health, late.result) == (0, 'defeated')
+
+
+def check_boss_warp():
+    for index, stage in enumerate(STAGES):
+        if not any(spawn.kind in BOSS_KINDS for spawn in stage.enemies):
+            continue
+        w = World(index)
+        w.warp_to_boss()
+        boss = next(e for e in w.enemies if e.spawn.kind in BOSS_KINDS)
+        assert w.player.floor == boss.actor.floor and abs(w.player.x - boss.actor.x) > 200, (stage.title, w.player)
+        for _ in range(30):                 # 도착하자마자 맞거나 끼지 않는다.
+            w.step(Motion())
+        assert w.result == 'playing' and w.health == w.max_health, stage.title
+
+
 def main():
+    check_balance()
+    check_boss_warp()
+    print('OK   밸런스 표')
     failed = False
     for index, stage in enumerate(STAGES):
         number = index + 1

@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
 
 import boss_skills
+from stages import HAZARD_RATIO, LEVEL_UP_XP, attack_power, max_health
 from stages import (
     ACTOR_RADIUS, BOSS_KINDS, DOOR_GRACE, ENEMY_KINDS,
-    GATE_HALF_WIDTH, LEFT, MAX_HEALTH, MOVE_SPEED,
+    GATE_HALF_WIDTH, LEFT, MOVE_SPEED,
     PLATE_RANGE, RIGHT, STAIR_RANGE, STAGES, STEP, WEAPONS, EnemySpawn, Point,
 )
 
@@ -77,6 +78,7 @@ class Enemy:
     spawn: EnemySpawn
     actor: Actor
     health: int | None
+    max_health: int | None = None
     patrol_direction: int = -1
     target: Actor | None = None
     last_seen: float = 0
@@ -88,6 +90,7 @@ class Enemy:
     skill_time: float = 0
     skill_cooldown: float = 0
     skill_index: int = 0
+    boss_engaged: bool = False  # 보스가 본체를 한 번 발견했는지
 
 
 def approach_direction(start: float, end: float) -> int:
@@ -95,18 +98,21 @@ def approach_direction(start: float, end: float) -> int:
 
 
 class World:
-    def __init__(self, index: int = 0, weapon_index: int = 2):
+    def __init__(self, index: int = 0, weapon_index: int = 2, xp: int = 0):
+        self.xp = xp  # 스테이지를 넘어가도 이어지는 누적 경험치
         self.index = index
         self.stage = STAGES[index]
         self.player = Actor.at(self.stage.start)
         self.echo: Echo | None = None
         self.recording: Recording | None = None
         self.doors = [DoorState() for gate in self.stage.gates]
-        self.enemies = [
-            Enemy(spawn, Actor.at(spawn.point, -1), ENEMY_KINDS[spawn.kind].health)
-            for spawn in self.stage.enemies
-        ]
-        self.health = MAX_HEALTH
+        self.enemies = []
+        for spawn in self.stage.enemies:
+            health = ENEMY_KINDS[spawn.kind].health
+            health = None if health is None else round(health * self.stage.enemy_scale)
+            self.enemies.append(Enemy(spawn, Actor.at(spawn.point, -1), health, health))
+        self.health = self.max_health
+        self.damage_texts = []  # 맞은 자리에 뜨는 피해 숫자 [x, 층, 지난 시간, 글자, 본체가 맞았는가]
         self.weapon_index = weapon_index
         self.invulnerable = 0.0
         self.attack_cooldown = 0.0
@@ -117,6 +123,8 @@ class World:
         self.attack_age = 9.0   # 마지막 공격을 시작한 뒤 흐른 시간. 화면의 검기 이펙트가 쓴다.
         self.hit_sparks = []    # 공격이 적에게 맞은 자리 [x, 층, 지난 시간]
         self.boss_effects = []  # 보스 스킬 이펙트 (boss_skills.Effect)
+        self.gravity_field = None
+        self.shake = 0.0        # 화면을 흔드는 남은 시간
         self.time = 0.0
         self.result = 'playing'
         self.message = ''
@@ -133,6 +141,27 @@ class World:
         self.lift_progress = 0.0
         self.lift_riding = False
         self._update_doors(0)
+
+    @property
+    def level(self) -> int:
+        level, needed = 1, 0
+        for step in LEVEL_UP_XP:
+            needed += step
+            if self.xp < needed:
+                break
+            level += 1
+        return level
+
+    @property
+    def max_health(self) -> int:
+        return max_health(self.level)
+
+    def xp_progress(self) -> tuple[int, int]:
+        """(이번 레벨에서 모은 경험치, 다음 레벨까지 필요한 양). 최대 레벨이면 필요한 양이 0이다."""
+        level = self.level
+        spent = sum(LEVEL_UP_XP[:level - 1])
+        needed = LEVEL_UP_XP[level - 1] if level <= len(LEVEL_UP_XP) else 0
+        return self.xp - spent, needed
 
     def notify(self, message: str):
         self.message = message
@@ -217,6 +246,10 @@ class World:
         self.attack_cooldown = max(0, self.attack_cooldown - STEP)
         self.attack_flash = max(0, self.attack_flash - STEP)
         self.attack_age += STEP
+        self.shake = max(0, self.shake - STEP)
+        for text in self.damage_texts:
+            text[2] += STEP
+        self.damage_texts = [text for text in self.damage_texts if text[2] < 0.8]
         for spark in self.hit_sparks:
             spark[2] += STEP
         self.hit_sparks = [spark for spark in self.hit_sparks if spark[2] < 0.5]
@@ -224,22 +257,22 @@ class World:
             self.attack_hit_pending = False
             self._apply_attack()
         player_x, player_floor = self.player.x, self.player.floor
-        if not self.lift_riding:
+        if not self.lift_riding and not (self.gravity_field and self.gravity_field.captured):
             self._move(self.player, motion)
             self._block_body(player_x, player_floor)
+        boss_skills.update_gravity(self, motion.horizontal)
+        if self.result != 'playing':
+            return
         for hazard in self.stage.hidden_hazards:
             # 분신의 빛이 닿지 않은 함정은 뛰어넘을 수도 없다. 무작정 점프로는 통과하지 못한다.
             airborne = self.player.jump_time > 0 and self.hazard_lit(hazard)
             if not airborne and self.player.floor == hazard.floor and abs(self.player.x - hazard.x) <= 18:
                 # 맞으면서 밀고 지나갈 수 없도록 온 방향으로 튕겨 낸다. 점프로만 넘는다.
                 self._move_x(self.player, 70 if player_x > hazard.x else -70)
-                if self.invulnerable == 0:
-                    self.health -= 1
-                    self.invulnerable = 0.92
-                    self.notify('숨겨진 함정입니다! 분신 곁에서 위치를 보고 뛰어넘으세요.')
-                    if self.health <= 0:
-                        self.result = 'defeated'
-                        return
+                self.hurt(max(1, round(self.max_health * HAZARD_RATIO)),
+                          '숨겨진 함정입니다! 분신 곁에서 위치를 보고 뛰어넘으세요.')
+                if self.result != 'playing':
+                    return
         if attack and self.attack_cooldown == 0:
             self._attack(attack if isinstance(attack, str) else 'slash')
 
@@ -277,6 +310,14 @@ class World:
                     self.notify('보스를 처치하면 출구가 열립니다.')
             else:
                 self.result = 'cleared'
+
+    def warp_to_boss(self):
+        """본체를 보스가 있는 층의 입구(그 층으로 올라오는 사다리·승강기)로 옮긴다. B 키용."""
+        boss = next(enemy for enemy in self.enemies if enemy.spawn.kind in BOSS_KINDS)
+        floor = boss.actor.floor
+        entries = [stair.x for stair in self.stage.stairs + self.stage.elevators if stair.lower == floor - 1]
+        self.player.x = entries[0] if entries else boss.actor.x - 400
+        self.player.floor = floor
 
     def hazard_lit(self, hazard: Point) -> bool:
         return (self.echo is not None and self.echo.actor.floor == hazard.floor
@@ -387,6 +428,12 @@ class World:
                 actor.floor == gate.door.floor and abs(actor.x - gate.door.x) < GATE_HALF_WIDTH + ACTOR_RADIUS
                 for actor in occupants
             )
+            # Stage 1: keep the first gate open after the player has passed it,
+            # so the player can return to the second plate if the echo runs out.
+            if (self.index == 0 and gate.label == 'A' and state.open
+                    and self.player.floor == gate.door.floor
+                    and self.player.x >= gate.door.x + GATE_HALF_WIDTH + ACTOR_RADIUS):
+                state.latched = True
             state.open = state.latched or state.pressed or state.grace > 0 or (state.open and occupied)
 
     def _remove_echo(self):
@@ -501,7 +548,7 @@ class World:
     def _apply_attack(self):
         weapon = WEAPONS[self.weapon_index]
         reach = round(weapon.reach * (0.8 if self.attack_kind == 'slash' else 1.3))
-        damage = weapon.damage + (1 if self.attack_kind == 'slash' else 0)
+        damage = max(1, attack_power(self.level) + weapon.bonus + (1 if self.attack_kind == 'slash' else 0))
         for enemy in self.enemies:
             offset = enemy.actor.x - self.player.x
             if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, reach):
@@ -511,8 +558,14 @@ class World:
                 self.notify('이 적은 분신으로 유인하거나 우회하세요.')
             else:
                 enemy.health = max(0, enemy.health - damage)
+                self.damage_texts.append([enemy.actor.x, enemy.actor.floor, 0.0, str(damage), False])
                 enemy.flash = 0.19
         boss_defeated = any(enemy.health == 0 and enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies)
+        level = self.level
+        self.xp += sum(ENEMY_KINDS[enemy.spawn.kind].xp for enemy in self.enemies if enemy.health == 0)
+        if self.level > level:
+            self.health = self.max_health
+            self.notify(f'레벨 {self.level}! 체력을 모두 회복했습니다.')
         self.enemies = [enemy for enemy in self.enemies if enemy.health != 0]
         if boss_defeated:
             self.notify('보스를 처치했습니다! 출구로 이동하세요.')
@@ -529,7 +582,20 @@ class World:
         def within_chase_area(target):
             return left - ENEMY_CHASE_MARGIN <= target.x <= right + ENEMY_CHASE_MARGIN
 
-        if enemy.target is not None:
+        is_boss = enemy.spawn.kind in BOSS_KINDS
+        same_floor = actor.floor == self.player.floor
+        if is_boss:
+            if not same_floor:
+                enemy.boss_engaged = False
+            elif self._clear_line(actor, self.player, sight):
+                enemy.boss_engaged = True
+        boss_duel = is_boss and same_floor and enemy.boss_engaged
+        if boss_duel:
+            # 한 번 발견한 본체는 같은 층에서 멀어져도 계속 추적한다.
+            enemy.target = self.player
+            enemy.last_seen = self.player.x
+            enemy.unseen = 0
+        elif enemy.target is not None:
             if abs(actor.x - enemy.target.x) > sight + 100 or not within_chase_area(enemy.target):
                 enemy.target = None
                 enemy.windup = 0
@@ -585,24 +651,30 @@ class World:
             actor.facing = direction
             self._move_x(actor, direction * min(abs(destination - actor.x), speed * STEP))
 
-    def hurt(self, message: str) -> bool:
+    def hurt(self, amount: int, message: str) -> bool:
         """본체가 피해를 한 번 입는다. 무적 시간 중이면 False."""
         if self.invulnerable > 0:
             return False
-        self.health -= 1
+        self.health = max(0, self.health - amount)
         self.invulnerable = 0.92
+        self.damage_texts.append([self.player.x, self.player.floor, 0.0, f'-{amount}', True])
         self.notify(message)
+        if self.health == 0:
+            self.result = 'defeated'
         return True
+
+    def enemy_damage(self, enemy: Enemy) -> int:
+        kind = ENEMY_KINDS[enemy.spawn.kind]
+        if kind.damage_ratio:
+            return max(1, round(self.max_health * kind.damage_ratio))
+        return round(kind.damage * self.stage.enemy_scale)
 
     def _enemy_attack(self, enemy: Enemy, distance: int):
         target = enemy.target
         if target is None or not self._clear_line(enemy.actor, target, distance + 8):
             return
         if target is self.player:
-            if self.invulnerable == 0:
-                self.health -= 1
-                self.invulnerable = 0.92
-                self.notify('피격! 필요하면 R로 스테이지를 다시 시작하세요.')
+            self.hurt(self.enemy_damage(enemy), '피격! 필요하면 R로 스테이지를 다시 시작하세요.')
         elif self.echo is not None and target is self.echo.actor:
             if self.stage.guard and enemy.spawn.point == self.stage.guard:
                 self.guard_open_time = 4.0 if self.stage.elevators else 1.1
