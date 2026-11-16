@@ -179,7 +179,8 @@ class World:
             if self.isolation_closed:
                 self.isolation_closed = False
                 self.notify('격리실 문을 열었습니다.')
-            elif any(enemy.spawn.kind == 'magic_armor_guard' and enemy.actor.floor == room.door.floor and enemy.actor.x >= room.inside_x for enemy in self.enemies):
+            elif (not any(enemy.spawn.kind == 'magic_armor_guard' for enemy in self.enemies)
+                  or any(enemy.spawn.kind == 'magic_armor_guard' and enemy.actor.floor == room.door.floor and enemy.actor.x >= room.inside_x for enemy in self.enemies)):
                 self.isolation_closed = True
                 self.notify('몬스터를 가뒀습니다. 위층 보안문이 열립니다.')
             else:
@@ -348,7 +349,9 @@ class World:
                 yield room.exit_gate.x
         if self.stage.watch_gate and self.stage.watch_gate.door.floor == floor and not self.watch_active:
             yield self.stage.watch_gate.door.x
-        if self.index != 2 and self.stage.guard and self.stage.guard.floor == floor and self.guard_open_time == 0:
+        if (self.index != 2 and self.stage.guard and self.stage.guard.floor == floor
+                and self.guard_open_time == 0
+                and any(enemy.spawn.point == self.stage.guard for enemy in self.enemies)):
             yield self.stage.guard.x
         if self.stage.sync_gate and not self.sync_unlocked and self.stage.sync_gate.door.floor == floor:
             yield self.stage.sync_gate.door.x
@@ -561,6 +564,9 @@ class World:
                 self.damage_texts.append([enemy.actor.x, enemy.actor.floor, 0.0, str(damage), False])
                 enemy.flash = 0.19
         boss_defeated = any(enemy.health == 0 and enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies)
+        if self.stage.isolation and any(enemy.health == 0 and enemy.spawn.kind == 'magic_armor_guard'
+                                        for enemy in self.enemies):
+            self.isolation_closed = True
         level = self.level
         self.xp += sum(ENEMY_KINDS[enemy.spawn.kind].xp for enemy in self.enemies if enemy.health == 0)
         if self.level > level:

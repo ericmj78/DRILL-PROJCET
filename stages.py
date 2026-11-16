@@ -113,19 +113,19 @@ class EnemyKind:
     size: int
     damage: int = 0          # 본체가 맞을 때 깎이는 체력
     xp: int = 0              # 처치했을 때 얻는 경험치
-    damage_ratio: float = 0  # 벨 수 없는 적은 본체 최대 체력의 이 비율만큼 깎는다.
+    damage_ratio: float = 0  # 일부 적은 본체 최대 체력에 비례해 피해를 준다.
 
 
 ENEMY_KINDS = {
-    'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, None, 115, damage_ratio=0.4),
-    'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, None, 105, damage_ratio=0.5),
+    'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, 45, 115, xp=20, damage_ratio=0.4),
+    'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, 60, 105, xp=28, damage_ratio=0.5),
     'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 12, 86, damage=8, xp=12),
     'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 10, 100, damage=7, xp=10),
     'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 260, damage=8, xp=80),
     'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
     'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
     'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 32, 115, damage=11, xp=20),
-    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, None, 115, damage_ratio=0.4),
+    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, 40, 115, xp=24, damage_ratio=0.4),
     'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 30, 112, damage=10, xp=22),
     'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 230, damage=11, xp=120),
 }
@@ -182,7 +182,7 @@ STAGES = (
     ),
     Stage(
         '02  사냥꾼의 시야',
-        '뿔짐승은 벨 수 없습니다. 분신을 왼쪽으로 달리게 해 유인하고, 짐승이 지나간 뒤 내려가세요.',
+        '뿔짐승을 처치하거나 분신으로 유인한 뒤 아래층을 지나가세요.',
         3, Point(111, 1), Point(2100, 2),
         stairs=(Stair(659, 0), Stair(1200, 0)),
         elevators=(Stair(1950, 1),),
