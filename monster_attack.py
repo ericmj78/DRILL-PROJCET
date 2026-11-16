@@ -78,6 +78,12 @@ ATTACKS = {
     # 대마녀 보스: 높이 떠올라 상대 발밑에 마력을 모았다가 터뜨린다.
     'grand_witch': Attack(Pose(-9, 12, 0.96, 1.10, -13), Pose(11, 2, 1.08, 1.00, 11),
                           Fx('mana-burst', 0, 0.33, 62, 0, 1.0)),
+    'time_thief': Attack(Pose(-8, 0, 0.97, 1.04, -9), Pose(14, 1, 1.05, 0.97, 12),
+                         Fx('mana-burst', 0, 0.33, 40, 8, 0.65)),
+    'cursed_lantern': Attack(Pose(-8, 8, 0.96, 1.05, -10), Pose(15, 18, 1.06, 0.96, 13),
+                             Fx('magic-missile', 0.10, 0.87, 35, 45, 0.6)),
+    'broken_jester': Attack(Pose(-10, 0, 0.95, 1.07, -12), Pose(20, 0, 1.08, 0.95, 16),
+                            Fx('claw-swipe', 0, 0.07, 16, 12, 0.65)),
 }
 ATTACKS['magic_armor_guard'] = ATTACKS['magic_armor']
 ATTACKS['echo_knight'] = ATTACKS['magic_armor']

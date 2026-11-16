@@ -306,7 +306,7 @@ def stage_7(b):
     b.wait(0.4)
     b.rec()
     b.go(600)
-    b.kill('crawler')
+    b.kill('broken_jester')
     b.go(1300)
     b.up()
     b.rec()
@@ -318,7 +318,7 @@ def stage_7(b):
     b.go(860)
     b.until(lambda w: w.echo.actor.x < 900)        # 아래층 분신과 나란히 감지선을 넘는다
     b.go(520)
-    b.kill('watcher')
+    b.kill('cursed_lantern')
     b.go(105)
 
 
@@ -336,10 +336,9 @@ def stage_8(b):
     b.wait(0.6)
     b.rec()
     b.go(870)
-    b.kill('crawler')
-    b.go(950)
+    b.go(950, slash=True)
     b.up()
-    b.kill('watcher')
+    b.kill('cursed_lantern')
     b.go(1000)
     b.rec()         # 첫 분신: 함정을 비추며 앞서 걷는다
     b.go(1850)
@@ -375,7 +374,7 @@ def stage_9(b):
     b.wait(1.5)
     b.rec()
     b.go(1060)
-    b.kill('watcher')
+    b.kill('time_thief')
     b.go(1300)
     b.up()
     b.rec()
@@ -431,8 +430,8 @@ def check_balance():
     w._apply_attack()
     assert crawler.health == 5, crawler.health
     late = World(8)                                     # 후반 강화 ×1.6
-    watcher = next(e for e in late.enemies if e.spawn.kind == 'watcher')
-    assert (watcher.health, late.enemy_damage(watcher)) == (19, 13)
+    thief = next(e for e in late.enemies if e.spawn.kind == 'time_thief')
+    assert (thief.health, late.enemy_damage(thief)) == (32, 11)
     beast = next(e for e in late.enemies if e.spawn.kind == 'beast')
     assert late.enemy_damage(beast) == 10                # 25의 40%
     late.hurt(99, '테스트')

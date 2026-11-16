@@ -127,6 +127,9 @@ ENEMY_KINDS = {
     'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 32, 115, damage=11, xp=20),
     'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, 40, 115, xp=24, damage_ratio=0.4),
     'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 30, 112, damage=10, xp=22),
+    'time_thief': EnemyKind('monster_concepts/time-thief.png', 65, 175, 42, 20, 108, damage=7, xp=16),
+    'cursed_lantern': EnemyKind('monster_concepts/cursed-lantern.png', 70, 185, 42, 16, 112, damage=7, xp=14),
+    'broken_jester': EnemyKind('monster_concepts/broken-jester.png', 75, 185, 40, 18, 104, damage=7, xp=15),
     'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 230, damage=11, xp=120),
     'echo_knight': EnemyKind('monster_concepts/echo-knight-boss.png', 70, 260, 65, 180, 240, damage=12, xp=160),
 }
@@ -282,8 +285,8 @@ STAGES = (
             Gate('B', Point(1490, 0), Point(1050, 1)),
         ),
         enemies=(
-            EnemySpawn('watcher', Point(350, 1), (250, 450)),
-            EnemySpawn('crawler', Point(950, 0), (850, 1150)),
+            EnemySpawn('cursed_lantern', Point(350, 1), (250, 450)),
+            EnemySpawn('broken_jester', Point(950, 0), (850, 1150)),
         ),
         sync_gate=SyncGate(Point(800, 1), Point(800, 0), Point(500, 1)),
         echo_seconds=4.5,
@@ -300,8 +303,8 @@ STAGES = (
             Gate('D', Point(1080, 2), Point(1950, 2)),
         ),
         enemies=(
-            EnemySpawn('crawler', Point(929, 1), (885, 1000)),
-            EnemySpawn('watcher', Point(1150, 2), (1100, 1200)),
+            EnemySpawn('broken_jester', Point(929, 1), (885, 1000)),
+            EnemySpawn('cursed_lantern', Point(1150, 2), (1100, 1200)),
         ),
         hidden_hazards=(Point(1300, 2), Point(1520, 2), Point(1740, 2)),
         echo_seconds=4.5,
@@ -319,7 +322,7 @@ STAGES = (
         ),
         enemies=(
             EnemySpawn('beast', Point(1008, 0), (948, 1060)),
-            EnemySpawn('watcher', Point(1180, 1), (1100, 1250)),
+            EnemySpawn('time_thief', Point(1180, 1), (1100, 1250)),
             EnemySpawn('warden', Point(1500, 2), (1500, 1500)),
             EnemySpawn('echo_knight', Point(1120, 3), (1050, 1190)),
         ),

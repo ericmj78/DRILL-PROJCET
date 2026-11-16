@@ -11,6 +11,7 @@ from pico2d import pico2d as canvas
 
 from animation import AttackCycle, WalkCycle, draw_region
 import boss_skills
+import late_monster_motion
 from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
 from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
@@ -94,7 +95,8 @@ MONSTER_NAMES = {
     'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '여섯 다리 괴물',
     'jailer_boss': '쇠사슬 간수', 'magic_book': '마법책', 'potion_slime': '물약 슬라임',
     'magic_armor': '마법 갑옷', 'magic_armor_guard': '갑옷 경비병', 'witch': '마녀', 'grand_witch': '대마녀',
-    'echo_knight': '뒤틀린 잔향의 기사',
+    'echo_knight': '뒤틀린 잔향의 기사', 'time_thief': '시간 도둑',
+    'cursed_lantern': '저주받은 등불', 'broken_jester': '부서진 광대 인형',
 }
 
 
@@ -160,6 +162,7 @@ class View:
         self.player = load_asset('player.png')
         self.player_jump = load_asset('player_jump_sheet.png')
         self.jailer_chain_slam = load_asset('monster_concepts/prison-jailer-long-chain-slam-concept.png')
+        self.jester_walk = load_asset('monster_concepts/broken-jester-walk.png')
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
@@ -595,7 +598,14 @@ class View:
             skill_phase = boss_skills.phase(enemy)
             if skill_phase is not None:
                 pose = skill_pose(enemy.spawn.kind, *skill_phase)
-            if enemy.spawn.kind == 'jailer_boss' and enemy.skill == 'chain' and skill_phase is not None:
+            if enemy.spawn.kind in late_monster_motion.KINDS:
+                image = self.jester_walk if enemy.spawn.kind == 'broken_jester' else self.enemies[enemy.spawn.kind]
+                late_monster_motion.draw(image, screen_enemy.actor, y, kind.size, world.time,
+                                         enemy.spawn.kind, pose, tint)
+                if pose is not None:
+                    draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
+                                       enemy.windup, enemy.recovery)
+            elif enemy.spawn.kind == 'jailer_boss' and enemy.skill == 'chain' and skill_phase is not None:
                 self._draw_jailer_chain(screen_enemy.actor, y, skill_phase, tint, kind.size)
             elif pose is not None:
                 # 공격 중에는 monster_attack.py의 자세 스크립트대로 그린다.
@@ -634,7 +644,8 @@ class View:
                 self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
             # 머리 위에 이름과 체력바. 벨 수 없는 적은 이름만 흐리게 보인다.
             boss = enemy.spawn.kind in BOSS_KINDS
-            bar_y = y + (kind.size + 8 if boss else 73 if feet == 0.30 else 103)
+            bar_y = y + (kind.size + 25 if enemy.spawn.kind in late_monster_motion.KINDS
+                         else kind.size + 8 if boss else 73 if feet == 0.30 else 103)
             half = 45 if boss else 24
             if enemy.health is not None:
                 box(x - half - 1, bar_y - 1, x + half + 1, bar_y + 5, INK)
