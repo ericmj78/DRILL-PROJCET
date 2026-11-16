@@ -57,7 +57,7 @@ def main():
                         return
                     if action == 'start' or action and action.startswith('stage:'):
                         index = int(action.split(':')[1]) if ':' in action else 0
-                        world = World(index, weapon_index=world.weapon_index)
+                        world = World(index, weapon_index=world.weapon_index, xp=world.xp)
                         screen = 'play'
                         pressed.clear()
                         accumulator = 0.0
@@ -83,7 +83,7 @@ def main():
                     elif key == SDLK_RETURN and stage_entry:
                         number = int(stage_entry)
                         if 1 <= number <= len(STAGES):
-                            world = World(number - 1, weapon_index=world.weapon_index)
+                            world = World(number - 1, weapon_index=world.weapon_index, xp=world.xp)
                             screen = 'play'
                             stage_entry = None
                     accumulator = 0.0
@@ -103,7 +103,7 @@ def main():
                     continue
                 if key == SDLK_r or (key == SDLK_RETURN and world.result == 'cleared'):
                     index = world.index if key == SDLK_r else (world.index + 1) % len(STAGES)
-                    world = World(index, weapon_index=world.weapon_index)
+                    world = World(index, weapon_index=world.weapon_index, xp=world.xp)
                     pressed.clear()
                     pending_stairs = 0
                     pending_jump = False

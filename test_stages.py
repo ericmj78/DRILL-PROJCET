@@ -423,7 +423,33 @@ def rush(index):
     return bot.w.result
 
 
+def check_balance():
+    """BALANCE.md의 레벨 표와 피해 공식이 코드와 맞는지 확인한다."""
+    w = World(0)
+    assert (w.level, w.max_health, w.health, w.xp_progress()) == (1, 25, 25, (0, 30))
+    for xp, level, top in ((29, 1, 25), (30, 2, 28), (75, 3, 31), (575, 8, 46), (915, 10, 52), (5000, 10, 52)):
+        w.xp = xp
+        assert (w.level, w.max_health) == (level, top), (xp, w.level, w.max_health)
+    assert w.xp_progress()[1] == 0                      # 최대 레벨
+    w = World(0)                                        # 여섯 다리 괴물: 체력 10, 피해 7
+    crawler = w.enemies[0]
+    assert (crawler.health, w.enemy_damage(crawler)) == (10, 7)
+    w.player.x, w.player.facing, crawler.actor.x = 500, 1, 560
+    w.weapon_index, w.attack_kind = 2, 'slash'          # 한손검 베기 1레벨: 4 + 0 + 1 = 5
+    w._apply_attack()
+    assert crawler.health == 5, crawler.health
+    late = World(9)                                     # 후반 강화 ×1.6
+    watcher = next(e for e in late.enemies if e.spawn.kind == 'watcher')
+    assert (watcher.health, late.enemy_damage(watcher)) == (19, 13)
+    beast = next(e for e in late.enemies if e.spawn.kind == 'beast')
+    assert late.enemy_damage(beast) == 10                # 25의 40%
+    late.hurt(99, '테스트')
+    assert (late.health, late.result) == (0, 'defeated')
+
+
 def main():
+    check_balance()
+    print('OK   밸런스 표')
     failed = False
     for index, stage in enumerate(STAGES):
         number = index + 1

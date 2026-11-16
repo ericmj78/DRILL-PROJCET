@@ -6,7 +6,18 @@ FLOOR_Y = (156, 320, 484)
 STEP = 1 / 60
 MOVE_SPEED = 230
 MAX_RECORD_SECONDS = 9
-MAX_HEALTH = 3
+# 본체 레벨 (BALANCE.md). 레벨 1~9에서 다음 레벨까지 필요한 경험치이며 최대 레벨은 10이다.
+LEVEL_UP_XP = (30, 45, 60, 80, 100, 120, 140, 160, 180)
+HAZARD_RATIO = 0.2      # 숨은 함정은 최대 체력의 20%를 깎는다.
+LATE_STAGE_SCALE = 1.6  # 8~10스테이지에 다시 나오는 초반 몬스터의 체력·피해 배율
+
+
+def max_health(level: int) -> int:
+    return 25 + 3 * (level - 1)
+
+
+def attack_power(level: int) -> int:
+    return 4 + (level - 1)
 ATTACK_RANGE = 86
 ATTACK_COOLDOWN = 0.32
 DOOR_GRACE = 0.18
@@ -80,14 +91,14 @@ class Weapon:
     name: str
     reach: int
     cooldown: float
-    damage: int = 1
+    bonus: int = 0  # 피해 = 공격력 + 무기 보정 + 공격 보정(베기 +1)
 
 
 WEAPONS = (
-    Weapon('맨손', ATTACK_RANGE, ATTACK_COOLDOWN),
-    Weapon('단검', 70, 0.23),
+    Weapon('맨손', ATTACK_RANGE, ATTACK_COOLDOWN, bonus=-1),
+    Weapon('단검', 70, 0.23, bonus=-2),
     Weapon('한손검', 99, 0.38),
-    Weapon('전투 망치', 91, 0.62, damage=2),
+    Weapon('전투 망치', 91, 0.62, bonus=3),
     Weapon('마력 지팡이', 113, 0.46),
 )
 
@@ -100,20 +111,23 @@ class EnemyKind:
     attack_range: int
     health: int | None  # None이면 기본 공격으로 처치할 수 없는 적이다.
     size: int
+    damage: int = 0          # 본체가 맞을 때 깎이는 체력
+    xp: int = 0              # 처치했을 때 얻는 경험치
+    damage_ratio: float = 0  # 벨 수 없는 적은 본체 최대 체력의 이 비율만큼 깎는다.
 
 
 ENEMY_KINDS = {
-    'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, None, 115),
-    'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, None, 105),
-    'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 2, 86),
-    'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 2, 100),
-    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 55, 12, 155),
-    'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 2, 76),
-    'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 3, 85),
-    'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 4, 115),
-    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, None, 115),
-    'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 4, 112),
-    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 12, 150),
+    'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, None, 115, damage_ratio=0.4),
+    'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, None, 105, damage_ratio=0.5),
+    'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 12, 86, damage=8, xp=12),
+    'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 10, 100, damage=7, xp=10),
+    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 55, 95, 155, damage=8, xp=80),
+    'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
+    'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
+    'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 32, 115, damage=11, xp=20),
+    'magic_armor_guard': EnemyKind('monster_concepts/magic-armor.png', 112, 600, 43, None, 115, damage_ratio=0.4),
+    'witch': EnemyKind('monster_concepts/witch.png', 60, 180, 50, 30, 112, damage=10, xp=22),
+    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 150, damage=11, xp=120),
 }
 
 BOSS_KINDS = frozenset(('jailer_boss', 'grand_witch'))
@@ -147,6 +161,7 @@ class Stage:
     lift: BalanceLift | None = None
     echo_seconds: float = MAX_RECORD_SECONDS  # 이 스테이지에서 분신 한 번에 녹화할 수 있는 시간
     elevators: tuple[Stair, ...] = ()
+    enemy_scale: float = 1.0  # 몬스터 체력·피해 배율
 
 
 STAGES = (
@@ -283,6 +298,7 @@ STAGES = (
         ),
         sync_gate=SyncGate(Point(800, 1), Point(800, 0), Point(500, 1)),
         echo_seconds=4.5,
+        enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
         '09  되돌아가는 발자국',
@@ -300,6 +316,7 @@ STAGES = (
         ),
         hidden_hazards=(Point(1300, 2), Point(1520, 2), Point(1740, 2)),
         echo_seconds=4.5,
+        enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
         '10  마지막 잔향',
@@ -318,5 +335,6 @@ STAGES = (
         hidden_hazards=(Point(1700, 2), Point(1900, 2)),
         guard=Point(1500, 2),
         echo_seconds=4,
+        enemy_scale=LATE_STAGE_SCALE,
     ),
 )

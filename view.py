@@ -15,7 +15,8 @@ from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_she
 from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
 from title_menu import CONTROLS, PAGE_TITLES
-from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, MAX_HEALTH, RIGHT, STAGES, STEP, WEAPONS
+from stages import LEFT
+from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STEP, WEAPONS
 from world import JUMP_DURATION
 
 
@@ -81,6 +82,19 @@ def line(x1, y1, x2, y2, color):
 
 def load_asset(name):
     return load_image(str(ASSETS / name))
+
+
+def text_width(font, text):
+    width, height = c_int(), c_int()
+    canvas.TTF_SizeUTF8(font.font, text.encode('utf-8'), byref(width), byref(height))
+    return width.value
+
+
+MONSTER_NAMES = {
+    'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '여섯 다리 괴물',
+    'jailer_boss': '쇠사슬 간수', 'magic_book': '마법책', 'potion_slime': '물약 슬라임',
+    'magic_armor': '마법 갑옷', 'magic_armor_guard': '갑옷 경비병', 'witch': '마녀', 'grand_witch': '대마녀',
+}
 
 
 def draw_grounded(image, region, x, y, height):
@@ -262,10 +276,8 @@ class View:
         self._draw_characters(world)
         self._draw_hud(world)
         if perf_counter() - self.stage_started_at < 3.5 and world.result == 'playing':
-            title_width = c_int()
-            title_height = c_int()
-            canvas.TTF_SizeUTF8(self.stage_title.font, world.stage.title.encode('utf-8'), byref(title_width), byref(title_height))
-            self.stage_title.draw((WIDTH - title_width.value) / 2, HEIGHT / 2, world.stage.title, WHITE)
+            width = text_width(self.stage_title, world.stage.title)
+            self.stage_title.draw((WIDTH - width) / 2, HEIGHT / 2, world.stage.title, WHITE)
         if world.result == 'defeated':
             self._card('다시 도전', world.stage.title, '분신의 경로나 본체의 출발 시점을 바꿔 보세요.', 'R   스테이지 재시작')
         elif world.result == 'cleared':
@@ -522,13 +534,28 @@ class View:
                 )
             else:
                 self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
-            bar_y = y + (kind.size + 8 if enemy.spawn.kind in BOSS_KINDS else 73 if feet == 0.30 else 103)
+            # 머리 위에 이름과 체력바. 벨 수 없는 적은 이름만 흐리게 보인다.
+            boss = enemy.spawn.kind in BOSS_KINDS
+            bar_y = y + (kind.size + 8 if boss else 73 if feet == 0.30 else 103)
+            half = 45 if boss else 24
             if enemy.health is not None:
-                box(x - 14, bar_y, x + 14, bar_y + 3, (52, 34, 67))
-                box(x - 14, bar_y, x - 14 + 28 * enemy.health / kind.health, bar_y + 3, PURPLE)
+                box(x - half - 1, bar_y - 1, x + half + 1, bar_y + 5, INK)
+                box(x - half, bar_y, x - half + 2 * half * min(1, enemy.health / enemy.max_health), bar_y + 4, RED if boss else PURPLE)
+            name = MONSTER_NAMES[enemy.spawn.kind]
+            self.small.draw(x - text_width(self.small, name) / 2, bar_y + 14, name,
+                            GOLD if boss else WHITE if enemy.health is not None else MUTED)
             if enemy.target is not None:
                 color = RED if enemy.windup > 0 else CYAN if world.echo and enemy.target is world.echo.actor else GOLD
-                self.small.draw(x - 3, bar_y + 13, '!', color)
+                self.small.draw(x - 3, bar_y + 32, '!', color)
+
+        for x, floor, age, text, on_player in world.damage_texts:
+            # 피해 숫자는 위로 떠오르며 사라진다. 받은 피해는 빨간색이다.
+            font = self.heading if on_player else self.body
+            y = self.floor_y[floor] + (120 if on_player else 95) + age * 40
+            screen_x = x - self.camera_x - text_width(font, text) / 2
+            font.draw(screen_x + 1, y - 1, text, INK)
+            font.draw(screen_x, y, text, RED if on_player else WHITE)
+        self._draw_boss_bar(world)
 
         for effect in world.boss_effects:
             if effect.age >= 0:
@@ -657,10 +684,22 @@ class View:
     def _draw_hud(self, world):
         box(0, 625, WIDTH, HEIGHT, INK)
         line(28, 626, WIDTH - 28, 626, LINE)
-        self.small.draw(32, 684, '본체 체력', MUTED)
-        for index in range(MAX_HEALTH):
-            x = 32 + index * 39
-            box(x, 648, x + 29, 661, RED if index < world.health else PANEL)
+        # 왼쪽 위: 레벨, 체력바, 경험치바
+        health, top = world.health, world.max_health
+        self.heading.draw(32, 673, f'Lv.{world.level}', GOLD)
+        box(118, 676, 322, 696, PANEL)
+        # 체력이 30% 아래면 막대가 깜빡인다.
+        danger = health < top * 0.3 and int(perf_counter() * 4) % 2
+        box(118, 676, 118 + 204 * health / top, 696, WHITE if danger else RED)
+        box(118, 676, 322, 696, LINE, filled=False)
+        label = f'HP  {health} / {top}'
+        self.small.draw(220 - text_width(self.small, label) / 2, 686, label, INK if danger else WHITE)
+        gained, needed = world.xp_progress()
+        box(118, 652, 322, 664, PANEL)
+        box(118, 652, 118 + 204 * (gained / needed if needed else 1), 664, GOLD)
+        box(118, 652, 322, 664, LINE, filled=False)
+        self.small.draw(118, 638, f'EXP  {gained} / {needed}' if needed else 'EXP  MAX', MUTED)
+        self._draw_minimap(world)
         self.small.draw(340, 684, '상태', MUTED)
         color, label = (CYAN, '녹화 중 · 시간 정지') if world.recording else (WHITE, '본체 조작 · 일반 진행')
         self.body.draw(340, 653, label, color)
@@ -685,35 +724,109 @@ class View:
 
         box(0, 0, WIDTH, 104, INK)
         line(28, 103, WIDTH - 28, 103, LINE)
-        hint = world.stage.hint
-        if world.index == 2:
-            floor = world.player.floor
-            if floor == 0:
-                hint = '1층: 분신으로 A 발판을 누른 뒤 왼쪽 승강기를 타세요.'
-            elif floor == 1:
-                hint = '2층: 본체는 C 발판에 서고 분신은 B로 보내세요. 그 뒤 가운데 승강기에서 ↑를 누르세요.'
-            elif floor == 2:
-                hint = '3층: 수호자의 공격을 피하며 오른쪽 끝 승강기를 타세요.'
-            elif floor == 3:
-                hint = '4층: 몬스터를 지나 왼쪽 끝 승강기에서 ↑를 눌러 보스방으로 가세요.'
-            else:
-                hint = '5층: 오른쪽의 쇠사슬 간수를 처치하고 출구로 가세요.'
-        if world.index == 6:
-            hints = (
-                '1층: 분신을 A 발판으로 보낸 뒤 C 발판과 균형 발판을 이용하세요.',
-                '2층: 왼쪽 승강기에서 ↑를 눌러 3층으로 가세요.',
-                '3층: 오른쪽 승강기에서 ↑를 눌러 4층으로 가세요.',
-                '4층: 왼쪽 승강기에서 ↑를 눌러 대마녀의 방으로 가세요.',
-                '5층: 대마녀를 처치한 뒤 오른쪽 출구로 가세요.',
-            )
-            hint = hints[world.player.floor]
-        self.small.draw(33, 78, hint, WHITE)
-        vertical_control = '사다리·승강기' if world.stage.stairs and world.stage.elevators else '승강기' if world.stage.elevators else '사다리'
-        self.small.draw(33, 45, f'← → 이동   Space 점프   ↑ ↓ {vertical_control}   C 녹화   A 베기   S 찌르기   E 레버   0–4 무기   Backspace 취소   R 재시작   Esc 종료', MUTED)
         if world.message_time > 0:
-            self.small.draw(33, 18, world.message, GOLD)
-        else:
-            self.small.draw(33, 18, 'P 스테이지 바로 이동', CYAN)
+            self.body.draw((WIDTH - text_width(self.body, world.message)) / 2, 52, world.message, GOLD)
+
+    def _draw_boss_bar(self, world):
+        """본체와 같은 층에 보스가 있으면 화면 위쪽에 큰 체력바를 보여 준다."""
+        boss = next((enemy for enemy in world.enemies if enemy.spawn.kind in BOSS_KINDS
+                     and enemy.actor.floor == world.player.floor), None)
+        if boss is None:
+            return
+        left, right, y = 340, 780, 572
+        box(left - 2, y - 2, right + 2, y + 14, INK)
+        box(left, y, left + (right - left) * min(1, boss.health / boss.max_health), y + 12, RED)
+        box(left - 2, y - 2, right + 2, y + 14, GOLD, filled=False)
+        name = MONSTER_NAMES[boss.spawn.kind]
+        self.body.draw(left, y + 28, name, GOLD)
+        label = f'{boss.health} / {boss.max_health}'
+        self.small.draw(right - text_width(self.small, label), y + 28, label, WHITE)
+
+    def _draw_minimap(self, world):
+        """????? ?? ?? ???? ??? ???? ????."""
+        stage = world.stage
+        left, width, row = 32, 210, 16
+        top = 614
+        bottom = top - stage.floors * row - 10
+        scale = (width - 20) / (RIGHT - LEFT)
+
+        def spot(point_x, floor):
+            # ? ??? ??? ???? ?? ??? ?? ??? ???.
+            x = max(LEFT, min(RIGHT, point_x))
+            return left + 10 + (x - LEFT) * scale, bottom + 7 + floor * row
+
+        def marker(point, color, size=2):
+            x, y = spot(point.x, point.floor)
+            box(x - size, y + 1, x + size, y + 1 + size * 2, color)
+
+        box(left, bottom, left + width, top, (7, 14, 27, 225))
+        box(left, bottom, left + width, top, LINE, filled=False)
+        for floor in range(stage.floors):
+            _, y = spot(LEFT, floor)
+            # ?? ????? ? ?? ?? ??? ?? ??? ????.
+            line(left + 10, y, left + width - 10, y, MUTED)
+
+        # ???? ???? ??? ? ? ??? ????.
+        for stair in stage.stairs:
+            x, y = spot(stair.x, stair.lower)
+            line(x, y, x, y + row, GOLD)
+            line(x - 2, y + row / 2, x + 2, y + row / 2, GOLD)
+        for elevator in stage.elevators:
+            x, y = spot(elevator.x, elevator.lower)
+            line(x, y, x, y + row, CYAN)
+            box(x - 2, y + row / 2 - 1, x + 2, y + row / 2 + 1, CYAN)
+
+        for wall in stage.walls:
+            x, y = spot(wall.x, wall.floor)
+            line(x, y, x, y + 8, MUTED)
+        for gate, state in zip(stage.gates, world.doors):
+            marker(gate.plate, GOLD)
+            if gate.lever is not None:
+                marker(gate.lever, PURPLE)
+            x, y = spot(gate.door.x, gate.door.floor)
+            line(x, y, x, y + 9, CYAN if state.open else GOLD)
+
+        # ?? ??? ??? ?? ? ???? ????? ????.
+        if stage.sequence:
+            for sensor in stage.sequence.sensors:
+                marker(sensor, GOLD)
+            marker(stage.sequence.door, CYAN if world.sequence_unlocked else GOLD)
+        if stage.sync_gate:
+            marker(stage.sync_gate.player_sensor, GOLD)
+            marker(stage.sync_gate.echo_sensor, CYAN)
+            marker(stage.sync_gate.door, CYAN if world.sync_unlocked else GOLD)
+        if stage.watch_gate:
+            marker(stage.watch_gate.focus, PURPLE)
+            marker(stage.watch_gate.door, CYAN if world.watch_active else GOLD)
+        if stage.isolation:
+            marker(stage.isolation.lever, PURPLE)
+            marker(stage.isolation.door, GOLD)
+            marker(stage.isolation.exit_gate, GOLD)
+        if stage.bridge:
+            for point in stage.bridge.points:
+                marker(point, CYAN, 1)
+        if stage.lift:
+            marker(stage.lift.platform, CYAN)
+            marker(stage.lift.weight, GOLD)
+
+        marker(stage.exit, CYAN, 3)
+        for enemy in world.enemies:
+            x, y = spot(enemy.actor.x, enemy.actor.floor + enemy.actor.elevator_offset)
+            size = 3 if enemy.spawn.kind in BOSS_KINDS else 2
+            box(x - size, y + 1, x + size, y + 1 + size * 2, RED)
+        if world.echo is not None:
+            actor = world.echo.actor
+            x, y = spot(actor.x, actor.floor + actor.elevator_offset)
+            box(x - 2, y + 1, x + 2, y + 5, CYAN)
+        if world.recording is not None:
+            actor = world.recording.preview
+            x, y = spot(actor.x, actor.floor + actor.elevator_offset)
+            box(x - 2, y + 1, x + 2, y + 5, CYAN, filled=False)
+        actor = world.player
+        x, y = spot(actor.x, actor.floor + actor.elevator_offset)
+        blink = 1 if int(perf_counter() * 3) % 2 else 0
+        box(x - 3 - blink, y, x + 3 + blink, y + 6 + blink, WHITE)
+        box(x - 3 - blink, y, x + 3 + blink, y + 6 + blink, INK, filled=False)
 
     def _draw_title(self, menu):
         height = WIDTH * self.title_art.h / self.title_art.w
