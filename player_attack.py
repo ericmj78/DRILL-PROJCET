@@ -5,7 +5,6 @@
 pixelfx 이펙트(assets/attack_fx)를 그린다. 수치를 바꾸려면 아래 표만 고치면 된다.
 """
 from monster_attack import draw_sheet
-from math import sin, pi
 
 HIT_AT = 0.45  # world.py가 공격 판정을 내는 진행도(공격 시간의 45%)
 
@@ -66,9 +65,16 @@ def held_sword_pose(actor):
         return (11, 38, 122, 0)
     hands = ((19, 43), (20, 40), (8, 35), (19, 44),
              (19, 44), (20, 40), (14, 39), (19, 43))
-    index = int(actor.walk_distance / 19) % len(hands)
+    phase = actor.walk_distance / 19
+    index = int(phase) % len(hands)
     x, y = hands[index]
-    return (x, y, 122 + 3 * sin(actor.walk_distance * pi / 76), 0)
+    # Swing around the grip in step with the same eight walk frames.  The
+    # grip stays on the drawn fist while the blade angle eases between poses.
+    angles = (116, 110, 105, 111, 119, 127, 132, 126)
+    t = phase - int(phase)
+    t = t * t * (3 - 2 * t)
+    angle = angles[index] + (angles[(index + 1) % len(angles)] - angles[index]) * t
+    return (x, y, angle, 0)
 
 
 def weapon_pose(kind: str, progress: float):

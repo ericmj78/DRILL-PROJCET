@@ -177,6 +177,13 @@ class View:
             load_asset(actors['player']['sheet']), actors['player']['frames'],
             actors['player']['draw_height'], actors['player']['stride_per_frame'],
         )
+        # 걸음에 맞춰 검이 흔들리는 시트. tools/make_sword_walk.py로 integrated 시트에서 만든다.
+        sword_walk = load_asset('player_sword_walk_swing.png')
+        cell_w, cell_h = sword_walk.w // 4, sword_walk.h // 2
+        sword_frames = [(col * cell_w, row * cell_h, cell_w, cell_h)
+                        for row in range(2) for col in range(4)]
+        self.player_sword_walk = WalkCycle(sword_walk, sword_frames, 90, 19.0)
+        self.player_sword_idle = load_asset('player_sword_idle_integrated.png')
         self.player_attack = AttackCycle(
             load_asset('player_attack_sheet.png'),
             [
@@ -247,6 +254,8 @@ class View:
         if world is not self.current_world:
             self.current_world = world
             self.stage_started_at = perf_counter()
+            self.held_sword_angle = 122.0
+            self.held_sword_updated_at = perf_counter()
             self.camera_y = 0.0
             self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
@@ -759,10 +768,31 @@ class View:
                     self._draw_weapon(player, world.weapon_index, floor, past, round(player_alpha * strength), world.attack_kind)
                 self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha, world.attack_kind)
         else:
-            self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
-            if world.weapon_index == 2:
-                self._draw_weapon(player, 2, floor, 0, player_alpha, 'slash',
-                                  pose=player_attack.held_sword_pose(world.player))
+            if world.weapon_index == 2 and player.jump_time <= 0:
+                if player.moving:
+                    self.player_sword_walk.draw(player, floor, player_alpha)
+                else:
+                    image = self.player_sword_idle
+                    region = (54, 15, 866, 1339)
+                    height = 86
+                    width = height * region[2] / region[3]
+                    canvas.SDL_SetTextureAlphaMod(image.texture, player_alpha)
+                    draw_region(image, region, player.x - width / 2, floor,
+                                width, height, player.facing < 0)
+                    canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+            else:
+                if world.weapon_index == 2:
+                    hand_x, hand_y, target_angle, lunge = player_attack.held_sword_pose(world.player)
+                    now = perf_counter()
+                    elapsed = min(0.1, max(0.0, now - self.held_sword_updated_at))
+                    self.held_sword_updated_at = now
+                    if world.player.moving:
+                        self.held_sword_angle = target_angle
+                    else:
+                        self.held_sword_angle += (target_angle - self.held_sword_angle) * min(1.0, elapsed * 12)
+                    self._draw_weapon(player, 2, floor, 0, player_alpha, 'slash',
+                                      pose=(hand_x, hand_y, self.held_sword_angle, lunge))
+                self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
         player_attack.draw_attack_effect(
             self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
             WEAPONS[world.weapon_index].reach, player.x, floor, player.facing)
