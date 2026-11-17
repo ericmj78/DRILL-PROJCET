@@ -58,12 +58,16 @@ def main():
                         return
                     if action == 'start' or action and action.startswith('stage:'):
                         index = int(action.split(':')[1]) if ':' in action else 0
-                        world = World(index, weapon_index=world.weapon_index, xp=world.xp)
+                        world = World(index, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
                         screen = 'play'
                         pressed.clear()
                         accumulator = 0.0
                     elif action == 'back':
                         menu.open('main')
+                    elif action == 'audio':
+                        volume = 0 if menu.muted else round(menu.volume * 128 / 100)
+                        canvas.Mix_Volume(-1, volume)
+                        canvas.Mix_VolumeMusic(volume)
                     elif action == 'fullscreen':
                         menu.fullscreen = not menu.fullscreen
                         canvas.SDL_SetWindowFullscreen(
@@ -74,12 +78,25 @@ def main():
                 if event.type != SDL_KEYDOWN:
                     continue
                 key = event.key
+                if screen == 'play' and world.echo_selecting:
+                    if key == SDLK_0 + 1:
+                        world.start_recording()
+                    elif key == SDLK_0 + 2:
+                        world.start_recording(world.monster_echo)
+                    elif key in (SDLK_ESCAPE, SDLK_BACKSPACE):
+                        world.echo_selecting = False
+                    pressed.clear()
+                    pending_stairs = 0
+                    pending_jump = False
+                    pending_attack = False
+                    accumulator = 0.0
+                    continue
                 if boss_selector is not None:
                     choice = boss_selector.handle(key)
                     if choice == 'cancel':
                         boss_selector = None
                     elif choice is not None:
-                        world = World(choice, weapon_index=world.weapon_index, xp=world.xp)
+                        world = World(choice, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
                         world.warp_to_boss()
                         screen = 'play'
                         boss_selector = None
@@ -95,7 +112,7 @@ def main():
                     elif key == SDLK_RETURN and stage_entry:
                         number = int(stage_entry)
                         if 1 <= number <= len(STAGES):
-                            world = World(number - 1, weapon_index=world.weapon_index, xp=world.xp)
+                            world = World(number - 1, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
                             screen = 'play'
                             stage_entry = None
                     accumulator = 0.0
@@ -123,7 +140,7 @@ def main():
                     continue
                 if key == SDLK_r or (key == SDLK_RETURN and world.result == 'cleared'):
                     index = world.index if key == SDLK_r else (world.index + 1) % len(STAGES)
-                    world = World(index, weapon_index=world.weapon_index, xp=world.xp)
+                    world = World(index, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
                     pressed.clear()
                     pending_stairs = 0
                     pending_jump = False
@@ -139,8 +156,17 @@ def main():
                     pending_jump = True
                 elif key in (SDLK_UP, SDLK_DOWN):
                     pending_stairs = 1 if key == SDLK_UP else -1
-                elif key == SDLK_c:
-                    world.toggle_recording()
+                elif key == SDLK_c and key not in pressed:
+                    pressed.add(key)
+                    if (world.recording is None and world.monster_echo is not None
+                            and world.player.elevator_target is None
+                            and world.player.jump_time <= 0 and not world.lift_riding):
+                        world.echo_selecting = True
+                        pressed.clear()
+                        pending_stairs = 0
+                        pending_jump = False
+                    else:
+                        world.toggle_recording()
                     pending_attack = False
                 elif key == SDLK_BACKSPACE:
                     world.cancel_recording()
@@ -163,6 +189,8 @@ def main():
 
             clear_canvas()
             view.draw(world, screen, menu)
+            if screen == 'play' and world.echo_selecting:
+                view.draw_echo_selector(world)
             if stage_entry is not None:
                 view.draw_stage_selector(stage_entry)
             if boss_selector is not None:

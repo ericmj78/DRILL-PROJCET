@@ -137,6 +137,12 @@ class View:
             'echo_knight': load_asset('ui_concepts/boss_health_bar_concept.png'),
         }
         self.title_art = load_asset('title_art.png')
+        self.guide_background = load_asset('game_guide_background.png')
+        self.settings_background = load_asset('settings_background.png')
+        self.title_screen_echo = load_asset('title_screen_echo_concept.png')
+        self.title_button_gold = load_asset('title_menu_button_gold.png')
+        self.title_button_scales = [1.0] * 5
+        self.title_button_updated_at = perf_counter()
         self.stage_art = {}
         for floor_count, (name, rows) in MAP_ART.items():
             image = load_asset(name)
@@ -163,13 +169,14 @@ class View:
         self.hero_sword_art = load_asset('weapons/sword-slim.png')
         self.player = load_asset('player.png')
         self.player_jump = load_asset('player_jump_sheet.png')
+        self.player_sword_jump = load_asset('player_sword_jump.png')
         self.jailer_chain_slam = load_asset('monster_concepts/prison-jailer-long-chain-slam-concept.png')
         self.jester_walk = load_asset('monster_concepts/broken-jester-walk-16.png')
         self.knight_sheets = {
             name: load_asset(f'monster_concepts/echo-knight-{name}-sheet.png')
             for name in ('walk', 'attack', 'charge', 'orb', 'bolts')
         }
-        self.echo = load_asset('echo.png')
+        self.echo = load_asset('echo_silver_gold.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
         actors = walk_data['actors']
@@ -194,10 +201,27 @@ class View:
             ],
             draw_height=103,
         )
-        self.echo_walk = WalkCycle(
-            load_asset(actors['echo']['sheet']), actors['echo']['frames'],
-            actors['echo']['draw_height'], actors['echo']['stride_per_frame'],
-        )
+        detailed_echo = load_asset('echo_detailed_sheet.png')
+        detailed_width = detailed_echo.w // 8
+        detailed_height = detailed_echo.h // 3
+        detailed_frames = [(index * detailed_width, detailed_height, detailed_width, detailed_height)
+                           for index in range(8)]
+        self.echo_walk = WalkCycle(detailed_echo, detailed_frames, 96, actors['echo']['stride_per_frame'])
+        # 본체 점프 시트와 포즈·배치가 같은 분신판. _draw_jump_pose가 같은 프레임 표로 그린다.
+        self.echo_jump_art = load_asset('echo_jump_sheet.png')
+        echo_files = {
+            'beast': 'hornbeast', 'warden': 'stone_warden', 'watcher': 'watcher',
+            'crawler': 'spider', 'magic_book': 'magic_book', 'potion_slime': 'potion_slime',
+            'magic_armor': 'magic_armor', 'magic_armor_guard': 'magic_armor', 'witch': 'witch',
+            'time_thief': 'time_thief', 'cursed_lantern': 'cursed_lantern', 'broken_jester': 'broken_jester',
+        }
+        self.monster_echo_walk = {}
+        for name, filename in echo_files.items():
+            sheet = load_asset(f'monster_echo_concepts/{filename}_echo_walk.png')
+            width, height = sheet.w // 4, sheet.h // 2
+            frames = [(column * width, row * height, width, height)
+                      for row in range(2) for column in range(4)]
+            self.monster_echo_walk[name] = WalkCycle(sheet, frames, ENEMY_KINDS[name].size, 9)
         self.attack_fx = load_attack_fx(ASSETS / 'attack_fx')
         self.enemy_walk = {
             name: MonsterWalk(load_asset(gait.sheet), gait)
@@ -254,8 +278,6 @@ class View:
         if world is not self.current_world:
             self.current_world = world
             self.stage_started_at = perf_counter()
-            self.held_sword_angle = 122.0
-            self.held_sword_updated_at = perf_counter()
             self.camera_y = 0.0
             self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
@@ -637,7 +659,7 @@ class View:
     def _draw_characters(self, world):
         recording = world.recording
         if world.echo is not None:
-            self._avatar(self.echo, self.echo_walk, self._screen_actor(world.echo.actor), opacity=145 if recording else 228)
+            self._draw_selected_echo(world.echo.actor, world.echo.monster_kind, 145 if recording else 228)
         for enemy in world.enemies:
             screen_enemy = copy(enemy)
             screen_enemy.actor = self._screen_actor(enemy.actor)
@@ -781,18 +803,9 @@ class View:
                                 width, height, player.facing < 0)
                     canvas.SDL_SetTextureAlphaMod(image.texture, 255)
             else:
-                if world.weapon_index == 2:
-                    hand_x, hand_y, target_angle, lunge = player_attack.held_sword_pose(world.player)
-                    now = perf_counter()
-                    elapsed = min(0.1, max(0.0, now - self.held_sword_updated_at))
-                    self.held_sword_updated_at = now
-                    if world.player.moving:
-                        self.held_sword_angle = target_angle
-                    else:
-                        self.held_sword_angle += (target_angle - self.held_sword_angle) * min(1.0, elapsed * 12)
-                    self._draw_weapon(player, 2, floor, 0, player_alpha, 'slash',
-                                      pose=(hand_x, hand_y, self.held_sword_angle, lunge))
-                self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
+                # 한손검을 들고 뛰면 칼이 손에 그려진 점프 시트를 쓴다 (tools/make_sword_jump.py).
+                jump_art = self.player_sword_jump if world.weapon_index == 2 else None
+                self._avatar(self.player, self.player_walk, player, opacity=player_alpha, jump_art=jump_art)
         player_attack.draw_attack_effect(
             self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
             WEAPONS[world.weapon_index].reach, player.x, floor, player.facing)
@@ -802,7 +815,7 @@ class View:
         self.floor_y = normal_floors
         if recording is not None:
             actor = self._screen_actor(recording.preview)
-            self._avatar(self.echo, self.echo_walk, actor)
+            self._draw_selected_echo(recording.preview, recording.monster_kind)
             marker = 'REC'
         else:
             actor = player
@@ -811,6 +824,15 @@ class View:
         color = CYAN if recording else WHITE
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
+
+    def _draw_selected_echo(self, actor, monster_kind, opacity=228):
+        actor = self._screen_actor(actor)
+        if monster_kind is None or monster_kind not in self.monster_echo_walk:
+            self._avatar(self.echo, self.echo_walk, actor, opacity=255)
+            return
+        floor = self._actor_floor_y(actor) + actor.jump_height
+        faces = 1 if monster_kind == 'broken_jester' else -1
+        self.monster_echo_walk[monster_kind].draw(actor, floor, opacity=opacity, faces=faces)
 
     def _draw_echo_knight(self, enemy, floor_y, size, skill_phase, tint):
         actor = enemy.actor
@@ -875,22 +897,24 @@ class View:
         )
         canvas.SDL_SetTextureAlphaMod(texture, 255)
 
-    def _avatar(self, idle, walk, actor, opacity=255):
+    def _avatar(self, idle, walk, actor, opacity=255, jump_art=None):
         if actor.jump_time > 0:
+            if jump_art is None:
+                jump_art = self.echo_jump_art if idle is self.echo else self.player_jump
             progress = min(7.999, actor.jump_time * 8 / JUMP_DURATION)
             phase = int(progress)
             # Blend briefly into the next pose instead of abruptly replacing it.
             blend = max(0.0, (progress - phase - 0.65) / 0.35) if phase < 7 else 0.0
-            self._draw_jump_pose(actor, JUMP_POSE_ORDER[phase], opacity, idle is self.echo)
+            self._draw_jump_pose(actor, JUMP_POSE_ORDER[phase], opacity, jump_art)
             if blend:
-                self._draw_jump_pose(actor, JUMP_POSE_ORDER[phase + 1], round(opacity * blend), idle is self.echo)
+                self._draw_jump_pose(actor, JUMP_POSE_ORDER[phase + 1], round(opacity * blend), jump_art)
         elif actor.moving:
-            walk.draw(actor, self._actor_floor_y(actor), opacity)
+            walk.draw(actor, self._actor_floor_y(actor) - (4 if idle is self.echo else 0), opacity)
         else:
             breathing = sin(self.animation_time * 2.1) * 1.5
             self._sprite(idle, actor, 91 + breathing, 0, opacity=opacity)
 
-    def _draw_jump_pose(self, actor, index, opacity, is_echo):
+    def _draw_jump_pose(self, actor, index, opacity, image):
         region = JUMP_FRAMES[index]
         scale = 91 / 406
         width, height = region[2] * scale, region[3] * scale
@@ -899,20 +923,20 @@ class View:
         left = actor.x - width / 2 + face_alignment
         bottom = self._actor_floor_y(actor) + actor.jump_height + JUMP_HEAD_LIFT[index]
         flip = actor.facing < 0
-        texture = self.player_jump.texture
-        canvas.SDL_SetTextureAlphaMod(texture, opacity)
-        if is_echo:
-            canvas.SDL_SetTextureColorMod(texture, 100, 220, 255)
-        draw_region(self.player_jump, region, left, bottom, width, height, flip)
-        if is_echo:
-            # The player's dark sprite cannot become bright cyan through color
-            # modulation alone; a cyan additive pass keeps the echo recognizable.
-            canvas.SDL_SetTextureBlendMode(texture, canvas.SDL_BLENDMODE_ADD)
-            canvas.SDL_SetTextureColorMod(texture, 0, 220, 255)
-            draw_region(self.player_jump, region, left, bottom, width, height, flip)
-            canvas.SDL_SetTextureBlendMode(texture, canvas.SDL_BLENDMODE_BLEND)
-        canvas.SDL_SetTextureColorMod(texture, 255, 255, 255)
-        canvas.SDL_SetTextureAlphaMod(texture, 255)
+        if image is not self.player_jump:
+            # 분신 시트의 망토 끝·빛 번짐과 칼 시트의 칼끝은 몸 둘레 영역 밖으로 나간다.
+            # 같은 비율로 프레임 칸 전체를 그려 잘리지 않게 한다.
+            cell_w, cell_h = image.w // 4, image.h // 2
+            cell_x, cell_y = index % 4 * cell_w, index // 4 * cell_h
+            pad_left, pad_right = region[0] - cell_x, cell_x + cell_w - region[0] - region[2]
+            pad_bottom = cell_y + cell_h - region[1] - region[3]
+            left -= (pad_right if flip else pad_left) * scale
+            bottom -= pad_bottom * scale
+            region = (cell_x, cell_y, cell_w, cell_h)
+            width, height = cell_w * scale, cell_h * scale
+        canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
+        draw_region(image, region, left, bottom, width, height, flip)
+        canvas.SDL_SetTextureAlphaMod(image.texture, 255)
 
     def _sprite(self, image, actor, size, time, feet=0.49, faces=1, opacity=255, tint=(255, 255, 255)):
         bob = abs(sin(time * 21)) * 4 if actor.moving else 0
@@ -1123,34 +1147,37 @@ class View:
         box(x - 3 - blink, y, x + 3 + blink, y + 6 + blink, INK, filled=False)
 
     def _draw_title(self, menu):
-        height = WIDTH * self.title_art.h / self.title_art.w
-        self.title_art.draw(WIDTH / 2, HEIGHT / 2, WIDTH, height)
-        pulse = (sin(perf_counter() * 4) + 1) / 2
+        if menu.page == 'controls':
+            self._draw_guide(menu)
+            return
+        if menu.page == 'settings':
+            self._draw_settings(menu)
+            return
         if menu.page == 'main':
-            line(62, 523, 147, 523, CYAN)
-            self.small.draw(62, 496, '멈춘 시간의 잔향', CYAN)
-            self.display.draw(58, 440, 'ECHO ESCAPE', WHITE)
-            self.body.draw(62, 377, '분신에게 길과 시간을 맡기고', MUTED)
-            self.body.draw(62, 348, '본체로 지하 감옥을 탈출하세요.', MUTED)
+            self.title_screen_echo.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
+            now = perf_counter()
+            elapsed = min(0.1, max(0.0, now - self.title_button_updated_at))
+            self.title_button_updated_at = now
         else:
+            height = WIDTH * self.title_art.h / self.title_art.w
+            self.title_art.draw(WIDTH / 2, HEIGHT / 2, WIDTH, height)
             box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 215))
             line(90, 640, 175, 640, CYAN)
             self.heading.draw(90, 610, PAGE_TITLES[menu.page], WHITE)
-        if menu.page == 'controls':
-            for row, (keys, what) in enumerate(CONTROLS):
-                y = 548 - row * 36
-                box(90, y - 14, 230, y + 14, PANEL)
-                self.body.draw(102, y, keys, CYAN)
-                self.body.draw(252, y, what, WHITE)
         for index, (action, label, (left, bottom, right, top)) in enumerate(menu.buttons()):
             chosen = index == menu.index
             middle = (bottom + top) / 2
             if menu.page == 'main':
-                # 고른 줄만 띠와 막대로 강조하고 글자가 살짝 숨 쉬듯 움직인다.
-                if chosen:
-                    box(left, bottom, right, top, (23, 60, 71))
-                    box(left, bottom, left + 4, top, CYAN)
-                self.body.draw(left + 20 + 4 * pulse * chosen, middle, label, CYAN if chosen else MUTED)
+                target = 1.08 if chosen else 1.0
+                scale = self.title_button_scales[index]
+                scale += (target - scale) * min(1.0, elapsed * 12)
+                self.title_button_scales[index] = scale
+                canvas.SDL_SetTextureAlphaMod(self.title_button_gold.texture, 255 if chosen else 165)
+                self.title_button_gold.draw((left + right) / 2, middle,
+                                            (right - left) * scale, (top - bottom) * scale)
+                canvas.SDL_SetTextureAlphaMod(self.title_button_gold.texture, 255)
+                width = text_width(self.body, label)
+                self.body.draw((left + right - width) / 2, middle, label, WHITE if chosen else MUTED)
                 continue
             box(left, bottom, right, top, (23, 60, 71) if chosen else PANEL)
             box(left, bottom, right, top, CYAN if chosen else LINE, filled=False)
@@ -1164,7 +1191,105 @@ class View:
                 self.body.draw(right - 170, middle, f'◀  {value}  ▶', CYAN if chosen else GOLD)
             else:
                 self.body.draw(left + 20, middle, label, CYAN if chosen else MUTED)
-        self.small.draw(62, 26, '↑ ↓ ← →  선택     Enter  결정     Esc  뒤로     마우스로 가리키고 클릭', MUTED)
+        if menu.page != 'main':
+            self.small.draw(62, 26, '↑ ↓ ← →  선택     Enter  결정     Esc  뒤로     마우스로 가리키고 클릭', MUTED)
+
+    def _draw_settings(self, menu):
+        self.settings_background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
+        self.heading.draw(245, 605, '설정', WHITE)
+        self.body.draw(245, 464, '전체 음량', WHITE)
+        box(530, 458, 730, 470, (36, 46, 59))
+        if menu.volume:
+            box(530, 458, 530 + 2 * menu.volume, 470, GOLD)
+        value = '음소거' if menu.muted else f'{menu.volume}%'
+        self.body.draw(835, 464, value, MUTED if menu.muted else WHITE)
+        for index, (action, label, (left, bottom, right, top)) in enumerate(menu.buttons()):
+            selected = index == menu.index
+            canvas.SDL_SetTextureAlphaMod(self.title_button_gold.texture, 255 if selected else 160)
+            self.title_button_gold.draw((left + right) / 2, (bottom + top) / 2,
+                                        (right - left) * (1.04 if selected else 1), top - bottom)
+            canvas.SDL_SetTextureAlphaMod(self.title_button_gold.texture, 255)
+            if action == 'mute':
+                label = '음소거  :  켜짐' if menu.muted else '음소거  :  꺼짐'
+            elif action == 'fullscreen':
+                label = '화면 모드  :  전체 화면' if menu.fullscreen else '화면 모드  :  창 모드'
+            width = text_width(self.body, label)
+            self.body.draw((left + right - width) / 2, (bottom + top) / 2,
+                           label, WHITE if selected else MUTED)
+        self.small.draw(245, 195, '현재 게임에는 배경음과 효과음이 아직 없습니다.', MUTED)
+        self.small.draw(245, 165, '음량 선택 후 좌우 방향키 또는 + / − 클릭', MUTED)
+
+    def _draw_guide(self, menu):
+        self.guide_background.draw(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT)
+        self.heading.draw(85, 635, '게임 안내 및 조작법', WHITE)
+        for index, (action, label, (left, bottom, right, top)) in enumerate(menu.buttons()):
+            selected = index == menu.index
+            active = action == f'guide:{menu.guide_page}'
+            middle = (bottom + top) / 2
+            canvas.SDL_SetTextureAlphaMod(self.title_button_gold.texture, 255 if active or selected else 145)
+            scale = 1.05 if selected else 1.0
+            self.title_button_gold.draw((left + right) / 2, middle,
+                                        (right - left) * scale, (top - bottom) * scale)
+            canvas.SDL_SetTextureAlphaMod(self.title_button_gold.texture, 255)
+            width = text_width(self.small, label)
+            self.small.draw((left + right - width) / 2, middle, label, WHITE if active or selected else MUTED)
+
+        if menu.guide_page == 0:
+            for i, (keys, what) in enumerate(CONTROLS):
+                col, row = divmod(i, 6)
+                x, y = 105 + col * 480, 480 - row * 52
+                self.body.draw(x, y, keys, GOLD)
+                self.body.draw(x + 140, y, what, WHITE)
+        elif menu.guide_page == 1:
+            lines = (
+                ('분신 녹화', 'C로 행동을 녹화합니다. 녹화 중 적과 장치의 시간은 멈춥니다.'),
+                ('분신 재현', '녹화한 움직임이 재현되는 동안 본체를 따로 조작하세요.'),
+                ('함께 돌파', '분신으로 발판을 누르고 적을 유인하거나 감지 장치를 작동하세요.'),
+                ('전투와 출구', 'A는 강한 근거리 베기, S는 약하지만 더 긴 찌르기입니다.'),
+                ('몬스터 분신', '일반 몬스터를 처치하면 마지막으로 처치한 몬스터를 선택할 수 있습니다.'),
+                ('분신의 기능', '외형만 달라지며 발판 작동, 유인, 녹화 재현은 기본 분신과 같습니다.'),
+                ('알아두기', '몬스터 고유 공격이나 능력은 분신에 적용되지 않습니다. 보스는 획득할 수 없습니다.'),
+            )
+            for row, (label, description) in enumerate(lines):
+                y = 490 - row * 50
+                self.body.draw(105, y, label, GOLD)
+                self.small.draw(260, y, description, WHITE)
+        else:
+            groups = (
+                (('crawler', '거미형 적. 감옥 통로를 순찰합니다.'),
+                 ('beast', '빠르게 추격하는 뿔짐승입니다.'),
+                 ('watcher', '감옥 구역을 순찰하는 외눈 적입니다.'),
+                 ('warden', '돌로 된 몸을 가진 수호자입니다.'),
+                 ('jailer_boss', '보스. 쇠사슬, 낙석, 돌진을 사용합니다.')),
+                (('magic_book', '성을 순찰하는 마법책입니다.'),
+                 ('potion_slime', '물약 모양의 슬라임입니다.'),
+                 ('magic_armor', '마법으로 움직이는 갑옷입니다.'),
+                 ('magic_armor_guard', '격리실로 유인할 수 있는 갑옷 경비병입니다.'),
+                 ('witch', '마법사의 성에 있는 마녀입니다.'),
+                 ('grand_witch', '보스. 중력장, 낙뢰, 마력 구체를 사용합니다.')),
+                (('time_thief', '후반 구역을 지키는 시간 도둑입니다.'),
+                 ('cursed_lantern', '후반 구역을 순찰하는 저주받은 등불입니다.'),
+                 ('broken_jester', '후반 구역을 순찰하는 광대 인형입니다.'),
+                 ('echo_knight', '보스. 돌진, 마력 구체, 낙뢰를 사용합니다.')),
+            )
+            for i, (kind, description) in enumerate(groups[menu.guide_page - 2]):
+                col, row = i % 2, i // 2
+                x, y = 95 + col * 485, 475 - row * 105
+                image = self.enemies[kind]
+                image.draw(x + 35, y, 68, 78)
+                self.body.draw(x + 85, y + 16, MONSTER_NAMES.get(kind, '갑옷 경비병'), GOLD)
+                self.small.draw(x + 85, y - 14, description, WHITE)
+            self.small.draw(100, 145, '일반 몬스터 분신: 외형이 바뀌며 기본 분신과 같은 기능을 사용합니다.', MUTED)
+            self.small.draw(100, 119, '몬스터 고유 능력은 적용되지 않으며 보스는 분신으로 획득할 수 없습니다.', MUTED)
+
+    def draw_echo_selector(self, world):
+        box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
+        box(300, 225, 820, 495, INK)
+        box(300, 225, 820, 495, LINE, filled=False)
+        self.heading.draw(335, 452, '분신 선택', WHITE)
+        self.body.draw(345, 400, '1. 기본 분신', CYAN)
+        self.body.draw(345, 355, f'2. 몬스터 분신 · {MONSTER_NAMES[world.monster_echo]}', GOLD)
+        self.small.draw(335, 270, '숫자키로 선택   Esc 또는 Backspace 취소', WHITE)
 
     def draw_boss_selector(self, selector):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))

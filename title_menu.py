@@ -10,10 +10,11 @@ from pico2d import (
 from stages import BOSS_KINDS, STAGES
 
 MAIN = (
-    ('start', '게임 시작'), ('stages', '스테이지 선택'), ('controls', '조작법'),
+    ('start', '게임 시작'), ('stages', '스테이지 선택'), ('controls', '게임 안내 및 조작법'),
     ('settings', '설정'), ('quit', '게임 종료'),
 )
-PAGE_TITLES = {'stages': '스테이지 선택', 'controls': '조작법', 'settings': '설정'}
+PAGE_TITLES = {'stages': '스테이지 선택', 'controls': '게임 안내 및 조작법', 'settings': '설정'}
+GUIDE_TABS = ('조작법', '게임 방법', '초반 몬스터', '중반 몬스터', '후반 몬스터')
 CONTROLS = (
     ('← →', '이동'), ('Space', '점프'), ('↑ ↓', '사다리 · 승강기'), ('C', '분신 녹화 시작 / 재현'),
     ('Backspace', '녹화 취소'), ('A / S', '베기 / 찌르기'), ('E', '레버'), ('0 – 4', '무기 바꾸기'),
@@ -52,23 +53,47 @@ class TitleMenu:
         self.page = 'main'
         self.index = 0
         self.fullscreen = True
+        self.guide_page = 0
+        self.volume = 100
+        self.muted = False
 
     def open(self, page):
         self.page = page
         self.index = 0
+        if page == 'controls':
+            self.guide_page = 0
 
     def buttons(self):
         """지금 페이지의 (동작, 글자, 버튼 사각형) 목록."""
         if self.page == 'main':
-            return [(action, label, (62, 212 - row * 42, 330, 246 - row * 42))
+            return [(action, label, (65, 350 - row * 55, 345, 398 - row * 55))
                     for row, (action, label) in enumerate(MAIN)]
         if self.page == 'stages':
             return [(f'stage:{index}', stage.title,
                      (90 + index % 5 * 192, 400 - index // 5 * 150, 262 + index % 5 * 192, 520 - index // 5 * 150))
                     for index, stage in enumerate(STAGES)] + [BACK]
         if self.page == 'settings':
-            return [('fullscreen', '화면 모드', (90, 500, 620, 552)), BACK]
+            return [('volume_down', '−', (450, 438, 510, 490)),
+                    ('volume_up', '+', (750, 438, 810, 490)),
+                    ('mute', '음소거', (245, 340, 815, 392)),
+                    ('fullscreen', '화면 모드', (245, 255, 815, 307)), BACK]
+        if self.page == 'controls':
+            return [(f'guide:{i}', label, (80 + i * 192, 538, 256 + i * 192, 580))
+                    for i, label in enumerate(GUIDE_TABS)] + [BACK]
         return [BACK]
+
+    def activate(self, action):
+        if action and action.startswith('guide:'):
+            self.guide_page = int(action.split(':')[1])
+            return None
+        if action in ('volume_down', 'volume_up'):
+            self.volume = max(0, min(100, self.volume + (10 if action == 'volume_up' else -10)))
+            self.muted = False
+            return 'audio'
+        if action == 'mute':
+            self.muted = not self.muted
+            return 'audio'
+        return action
 
     def move(self, dx, dy):
         # 스테이지 카드는 한 줄에 5장이라 위아래로 5칸씩 움직인다.
@@ -89,17 +114,19 @@ class TitleMenu:
             self.point(event.x, event.y)
             return None
         if event.type == SDL_MOUSEBUTTONDOWN:
-            return self.point(event.x, event.y) if event.button == SDL_BUTTON_LEFT else None
+            return self.activate(self.point(event.x, event.y)) if event.button == SDL_BUTTON_LEFT else None
         if event.type != SDL_KEYDOWN:
             return None
         action = self.buttons()[self.index][0]
+        if event.key in (SDLK_LEFT, SDLK_RIGHT) and action in ('volume_down', 'volume_up'):
+            return self.activate('volume_down' if event.key == SDLK_LEFT else 'volume_up')
         if event.key in (SDLK_LEFT, SDLK_RIGHT) and action == 'fullscreen':
-            return action
+            return self.activate(action)
         if event.key in MOVES:
             self.move(*MOVES[event.key])
             return None
         if event.key in (SDLK_RETURN, SDLK_SPACE):
-            return action
+            return self.activate(action)
         if event.key == SDLK_ESCAPE:
             return 'quit' if self.page == 'main' else 'back'
         return None

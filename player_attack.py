@@ -57,26 +57,6 @@ def sword_pose(kind, progress):
     return x0 + (x1 - x0) * blend, y0 + (y1 - y0) * blend, angle, lunge
 
 
-def held_sword_pose(actor):
-    """Grip positions for the existing idle, walk, and jump body images."""
-    if actor.jump_time > 0:
-        return (15, 46, 122, 0)
-    if not actor.moving:
-        return (11, 38, 122, 0)
-    hands = ((19, 43), (20, 40), (8, 35), (19, 44),
-             (19, 44), (20, 40), (14, 39), (19, 43))
-    phase = actor.walk_distance / 19
-    index = int(phase) % len(hands)
-    x, y = hands[index]
-    # Swing around the grip in step with the same eight walk frames.  The
-    # grip stays on the drawn fist while the blade angle eases between poses.
-    angles = (116, 110, 105, 111, 119, 127, 132, 126)
-    t = phase - int(phase)
-    t = t * t * (3 - 2 * t)
-    angle = angles[index] + (angles[(index + 1) % len(angles)] - angles[index]) * t
-    return (x, y, angle, 0)
-
-
 def weapon_pose(kind: str, progress: float):
     """지금 진행도의 (손 앞쪽 거리, 손 높이, 무기 각도, 몸 내디딤)."""
     keys = SLASH if kind == 'slash' else THRUST

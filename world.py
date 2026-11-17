@@ -56,6 +56,7 @@ class Recording:
     facing: int
     preview: Actor
     inputs: list[Motion] = field(default_factory=list)
+    monster_kind: str | None = None
 
 
 @dataclass
@@ -63,6 +64,7 @@ class Echo:
     actor: Actor
     inputs: tuple[Motion, ...]
     cursor: int = 0
+    monster_kind: str | None = None
 
 
 @dataclass
@@ -98,13 +100,15 @@ def approach_direction(start: float, end: float) -> int:
 
 
 class World:
-    def __init__(self, index: int = 0, weapon_index: int = 2, xp: int = 0):
+    def __init__(self, index: int = 0, weapon_index: int = 2, xp: int = 0, monster_echo: str | None = None):
         self.xp = xp  # 스테이지를 넘어가도 이어지는 누적 경험치
         self.index = index
         self.stage = STAGES[index]
         self.player = Actor.at(self.stage.start)
         self.echo: Echo | None = None
         self.recording: Recording | None = None
+        self.monster_echo = monster_echo
+        self.echo_selecting = False
         self.doors = [DoorState() for gate in self.stage.gates]
         self.enemies = []
         for spawn in self.stage.enemies:
@@ -207,12 +211,17 @@ class World:
             self.notify('발판이 멈춘 뒤 녹화하세요.')
             return
         if self.recording is None:
-            start = Point(self.player.x, self.player.floor)
-            facing = self.player.facing
-            self.recording = Recording(start, facing, Actor.at(start, facing))
-            self.notify('분신으로 이동하고 필요한 자리에서 기다리세요.')
+            self.start_recording()
         else:
             self._finish_recording()
+
+    def start_recording(self, monster_kind: str | None = None):
+        self.echo_selecting = False
+        if self.recording is None:
+            start = Point(self.player.x, self.player.floor)
+            facing = self.player.facing
+            self.recording = Recording(start, facing, Actor.at(start, facing), monster_kind=monster_kind)
+            self.notify('분신으로 이동하고 필요한 자리에서 기다리세요.')
 
     def cancel_recording(self):
         if self.recording is not None:
@@ -226,12 +235,12 @@ class World:
             self.notify('분신이 재현할 녹화가 비어 있어요.')
             return
         self._remove_echo()
-        self.echo = Echo(Actor.at(record.start, record.facing), tuple(record.inputs))
+        self.echo = Echo(Actor.at(record.start, record.facing), tuple(record.inputs), monster_kind=record.monster_kind)
         self._update_doors(0)
         self.notify('녹화 상한에 도달해 재현을 시작합니다.' if time_limit else '본체 조작 재개 · 분신이 재현합니다.')
 
     def step(self, motion: Motion = Motion(), attack: str | bool = False):
-        if self.result != 'playing':
+        if self.result != 'playing' or self.echo_selecting:
             return
         self.message_time = max(0, self.message_time - STEP)
         if self.recording is not None:
@@ -572,6 +581,10 @@ class World:
         if self.level > level:
             self.health = self.max_health
             self.notify(f'레벨 {self.level}! 체력을 모두 회복했습니다.')
+        defeated = [enemy for enemy in self.enemies if enemy.health == 0 and enemy.spawn.kind not in BOSS_KINDS]
+        if defeated:
+            self.monster_echo = defeated[-1].spawn.kind
+            self.notify('몬스터 분신을 획득했습니다! C 키로 선택하세요.')
         self.enemies = [enemy for enemy in self.enemies if enemy.health != 0]
         if boss_defeated:
             self.notify('보스를 처치했습니다! 출구로 이동하세요.')
