@@ -92,7 +92,7 @@ def text_width(font, text):
 
 
 MONSTER_NAMES = {
-    'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '여섯 다리 괴물',
+    'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '거미',
     'jailer_boss': '쇠사슬 간수', 'magic_book': '마법책', 'potion_slime': '물약 슬라임',
     'magic_armor': '마법 갑옷', 'magic_armor_guard': '갑옷 경비병', 'witch': '마녀', 'grand_witch': '대마녀',
     'echo_knight': '뒤틀린 잔향의 기사', 'time_thief': '시간 도둑',
@@ -201,6 +201,12 @@ class View:
             load_asset(watcher['sheet']), watcher['frames'],
             watcher['draw_height'], watcher['stride_per_frame'],
         )
+        spider = load_asset('monster_spider_walk_sheet.png')
+        cell_w, cell_h = spider.w // 4, spider.h // 2
+        spider_frames = [(column * cell_w, row * cell_h + round(cell_h * 0.20),
+                          cell_w, round(cell_h * 0.65))
+                         for row in range(2) for column in range(4)]
+        self.enemy_walk['crawler'] = WalkCycle(spider, spider_frames, 70, 9)
         for name, asset in (
             ('jailer_boss', 'prison-jailer-boss'), ('magic_armor', 'magic-armor'),
             ('magic_armor_guard', 'magic-armor'),

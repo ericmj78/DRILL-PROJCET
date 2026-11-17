@@ -422,7 +422,7 @@ def check_balance():
         w.xp = xp
         assert (w.level, w.max_health) == (level, top), (xp, w.level, w.max_health)
     assert w.xp_progress()[1] == 0                      # 최대 레벨
-    w = World(0)                                        # 여섯 다리 괴물: 체력 10, 피해 7
+    w = World(0)                                        # 거미: 체력 10, 피해 7
     crawler = w.enemies[0]
     assert (crawler.health, w.enemy_damage(crawler)) == (10, 7)
     w.player.x, w.player.facing, crawler.actor.x = 500, 1, 560

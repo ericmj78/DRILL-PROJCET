@@ -120,7 +120,7 @@ ENEMY_KINDS = {
     'beast': EnemyKind('monster_01_hornbeast.png', 112, 250, 43, 45, 115, xp=20, damage_ratio=0.4),
     'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, 60, 105, xp=28, damage_ratio=0.5),
     'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 12, 86, damage=8, xp=12),
-    'crawler': EnemyKind('monster_04_crawler.png', 88, 185, 38, 10, 100, damage=7, xp=10),
+    'crawler': EnemyKind('monster_spider.png', 88, 185, 38, 10, 100, damage=7, xp=10),
     'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 260, damage=8, xp=80),
     'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
     'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
