@@ -1,7 +1,7 @@
 import json
 from copy import copy
 from ctypes import byref, c_int
-from math import sin
+from math import cos, sin
 from os import environ
 from pathlib import Path
 from time import perf_counter
@@ -17,8 +17,9 @@ from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
 from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
-from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STEP, WEAPONS
-from world import JUMP_DURATION
+from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
+from stages import PLATE_RANGE, Point
+from world import JUMP_DURATION, LIGHT_BELOW, WATCH_RANGE
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -127,10 +128,15 @@ class View:
         stage_font = font_dir / 'Hancom Gothic Bold.ttf'
         self.stage_title = load_font(str(stage_font if stage_font.exists() else bold if bold.exists() else fallback), 38)
         self.current_world = None
+        self.free_camera = False
+        self.free_camera_x = 0.0
+        self.camera_x = 0.0
+        self.camera_y = 0.0
         self.shake_base = None
         self.stage_started_at = 0.0
         self.background = load_asset('dungeon.png')
         self.hud_concept = load_asset('ui_concepts/echo_hud_concept.png')
+        self.echo_selection_panel = load_asset('ui_concepts/echo_selection_panel.png')
         self.boss_bars = {
             'jailer_boss': load_asset('ui_concepts/boss_bar_jailer_named.png'),
             'grand_witch': load_asset('ui_concepts/boss_bar_witch_named.png'),
@@ -269,6 +275,20 @@ class View:
         canvas.SDL_RenderSetViewport(renderer, canvas.SDL_Rect(
             base.x + round(sin(time * 83) * power), base.y + round(sin(time * 67) * power), base.w, base.h))
 
+    def toggle_free_camera(self):
+        self.free_camera = not self.free_camera
+        if self.free_camera:
+            self.free_camera_x = self.camera_x
+        self.camera_updated_at = perf_counter()
+
+    def move_free_camera(self, world, horizontal, vertical, elapsed):
+        if not self.free_camera:
+            return
+        speed = 700
+        self.free_camera_x = min(WIDTH, max(0, self.free_camera_x + horizontal * speed * elapsed))
+        maximum_y = max(0, (world.stage.floors - 1) * 410)
+        self.camera_y = min(maximum_y, max(0, self.camera_y + vertical * speed * elapsed))
+
     def draw(self, world, screen, menu=None):
         self._shake(world, screen)
         if screen == 'intro':
@@ -281,14 +301,15 @@ class View:
             self.camera_y = 0.0
             self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
-        self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
+        self.camera_x = self.free_camera_x if self.free_camera else min(WIDTH, max(0, focus.x - WIDTH * 0.60))
         if world.index in (0, 1, 3, 4):
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
             target = 400 * (focus.floor + focus.elevator_offset)
-            self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            if not self.free_camera:
+                self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y
                                  for floor in range(world.stage.floors))
             if world.index in (0, 1):
@@ -306,15 +327,17 @@ class View:
                     draw_region(corridor, (0, source_top, corridor.w, source_height),
                                 -self.camera_x, bottom, WIDTH * 2, 400)
                 self._draw_wizard_tower_effects(world.time)
-        elif world.index == 8:
-            # 세 층을 하나의 이미지로 그려 층 사이 배경이 끊기지 않는다.
+        elif world.index in (6, 7, 8):
+            # Follow the actual floor positions in the three-floor background.
+            box(0, 0, WIDTH, HEIGHT, INK)
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
             image = self.late_three_floor_art
             scale_y = 400 / 231
             levels = (0, (690 - 455) * scale_y, (690 - 228) * scale_y,
-                      (690 - 228) * scale_y + 400)
+                      (690 - 228) * scale_y + 400,
+                      (690 - 228) * scale_y + 400 + (690 - 455) * scale_y)
             floor = focus.floor
             offset = focus.elevator_offset
             target = levels[floor]
@@ -322,21 +345,28 @@ class View:
                 target += offset * (levels[floor + 1] - levels[floor])
             elif offset < 0 and floor > 0:
                 target += offset * (levels[floor] - levels[floor - 1])
-            self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
-            self.floor_y = tuple(160 + level - self.camera_y for level in levels)
+            if not self.free_camera:
+                self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            self.floor_y = tuple(160 + level - self.camera_y for level in levels[:world.stage.floors])
             bottom = self.floor_y[0] - (image.h - 690) * scale_y
             draw_region(image, (0, 0, image.w, image.h), -self.camera_x,
                         bottom, WIDTH * 2, image.h * scale_y)
-            arena = self.echo_boss_arena
-            draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
-                        self.floor_y[3] - 95, WIDTH * 2, 560)
+            if world.index == 6:
+                # The five-floor stage continues the same background above floor 3.
+                draw_region(image, (0, 0, image.w, image.h), -self.camera_x,
+                            bottom + levels[3], WIDTH * 2, image.h * scale_y)
+            elif world.index == 8:
+                arena = self.echo_boss_arena
+                draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
+                            self.floor_y[3] - 95, WIDTH * 2, 560)
         elif world.index in (2, 5):
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
             lift_offset = world.lift_progress if world.index == 5 and world.lift_riding and focus is world.player else 0
             target = 400 * (focus.floor + focus.elevator_offset + lift_offset)
-            self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            if not self.free_camera:
+                self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y for floor in range(5))
             if world.index == 2:
                 corridor = self.stage_art[1][0]
@@ -414,16 +444,20 @@ class View:
         self._draw_map(world)
         self._draw_characters(world)
         self._draw_hud(world)
+        if self.free_camera:
+            box(345, 587, 775, 620, INK)
+            self.small.draw(360, 600, '맵 둘러보기  ·  방향키 이동  ·  + 키로 돌아가기', WHITE)
+        stage_title = STAGE_TITLES[stage_group_index(world.index)]
         if perf_counter() - self.stage_started_at < 3.5 and world.result == 'playing':
-            width = text_width(self.stage_title, world.stage.title)
-            self.stage_title.draw((WIDTH - width) / 2, HEIGHT / 2, world.stage.title, WHITE)
+            width = text_width(self.stage_title, stage_title)
+            self.stage_title.draw((WIDTH - width) / 2, HEIGHT / 2, stage_title, WHITE)
         if world.result == 'defeated':
-            self._card('다시 도전', world.stage.title, '분신의 경로나 본체의 출발 시점을 바꿔 보세요.', 'R   스테이지 재시작')
+            self._card('다시 도전', stage_title, '분신의 경로나 본체의 출발 시점을 바꿔 보세요.', 'R   스테이지 재시작')
         elif world.result == 'cleared':
             if world.index == len(STAGES) - 1:
-                self._card('탈출 성공', 'ECHO ESCAPE', f'{len(STAGES)}개 스테이지의 봉인을 모두 통과했습니다.', 'ENTER   처음부터 다시')
+                self._card('탈출 성공', 'ECHO ESCAPE', f'{len(STAGE_GROUPS)}개 스테이지의 봉인을 모두 통과했습니다.', 'ENTER   처음부터 다시')
             else:
-                self._card('스테이지 완료', world.stage.title, '다음 스테이지에서 분신의 새로운 역할을 준비하세요.', 'ENTER   다음 스테이지')
+                self._card('스테이지 완료', stage_title, '다음 스테이지에서 분신의 새로운 역할을 준비하세요.', 'ENTER   다음 스테이지')
 
     def _wizard_fx_frame(self, name, frame, left, bottom, width, height, alpha=255):
         image, data = self.wizard_fx[name]
@@ -454,6 +488,59 @@ class View:
                         455 * sx - self.camera_x, 105 + (self.wizard_art.h - 260) * sy, 70, 50)
         self._wizard_fx_frame('potion', int(time * 8), 380 * sx - self.camera_x,
                               105 + (self.wizard_art.h - 600) * sy, 48, 62)
+
+    def _polygon(self, points, colors):
+        """삼각형들을 꼭짓점 색으로 채워 그린다. points는 게임 좌표(아래가 0)이고 3개씩 한 삼각형이다."""
+        height = canvas.get_canvas_height()
+        vertices = (canvas.SDL_Vertex * len(points))()
+        for vertex, (x, y), (r, g, b, a) in zip(vertices, points, colors):
+            vertex.position = canvas.SDL_FPoint(x, height - y)
+            vertex.color = canvas.SDL_Color(r, g, b, a)
+        canvas.SDL_RenderGeometry(canvas.renderer, None, vertices, len(points), None, 0)
+
+    def _disc(self, x, y, radius, color, sides=14):
+        points, colors = [], []
+        for i in range(sides):
+            a, b = i / sides * 6.2832, (i + 1) / sides * 6.2832
+            points += [(x, y), (x + radius * cos(a), y + radius * sin(a)), (x + radius * cos(b), y + radius * sin(b))]
+            colors += [(*color[:3], 255)] * 3
+        self._polygon(points, colors)
+
+    def _gear(self, x, y, radius, angle, lit):
+        """톱니바퀴. lit이면 금빛으로 빛난다."""
+        rim = (255, 190, 96) if lit else (112, 86, 56)
+        teeth = 10
+        points, colors = [], []
+        for i in range(teeth * 2):
+            a, b = angle + i / (teeth * 2) * 6.2832, angle + (i + 1) / (teeth * 2) * 6.2832
+            r1 = radius if i % 2 == 0 else radius * 0.78
+            points += [(x, y), (x + r1 * cos(a), y + r1 * sin(a)), (x + r1 * cos(b), y + r1 * sin(b))]
+            colors += [(*rim, 255)] * 3
+        self._polygon(points, colors)
+        self._disc(x, y, radius * 0.42, (34, 26, 20))
+
+    def _pipe(self, points, lit, time):
+        """수평·수직 구간으로 이은 파이프. lit이면 금빛이 흐른다."""
+        glow, dark = (226, 150, 66), (70, 54, 36)
+        segments = list(zip(points, points[1:]))
+        for (x1, y1), (x2, y2) in segments:
+            left, right = sorted((x1, x2))
+            bottom, top = sorted((y1, y2))
+            box(left - 2, bottom - 2, right + 2, top + 2, (22, 16, 12))
+            box(left - 1, bottom - 1, right + 1, top + 1, glow if lit else dark)
+        if not lit:
+            return
+        lengths = [abs(x2 - x1) + abs(y2 - y1) for (x1, y1), (x2, y2) in segments]
+        total = sum(lengths)
+        for k in range(3):
+            distance = (time * 140 + k * total / 3) % total if total else 0
+            for ((x1, y1), (x2, y2)), length in zip(segments, lengths):
+                if distance <= length and length:
+                    t = distance / length
+                    box(x1 + (x2 - x1) * t - 2, y1 + (y2 - y1) * t - 2,
+                        x1 + (x2 - x1) * t + 2, y1 + (y2 - y1) * t + 2, (255, 236, 190))
+                    break
+                distance -= length
 
     def _draw_puzzle_prop(self, name, x, y, width, height, active=True):
         tint = (255, 255, 255) if active else (120, 120, 135)
@@ -492,92 +579,168 @@ class View:
             box(31, y + 108, 57, y + 127, INK)
             self.small.draw(34, y + 117, f'{floor + 1}F', MUTED)
 
+        # 분신 퍼즐 장치. 기획서 10~14쪽 그림을 따라 파이프·빛·발판으로 연결 관계가 보이게 그린다.
+        cam, floor_y, now = self.camera_x, self.floor_y, world.time
+        echo = world.echo.actor if world.echo is not None else None
+
         if stage.sequence is not None:
-            for index, sensor in enumerate(stage.sequence.sensors):
-                x = sensor.x - self.camera_x
-                y = self.floor_y[sensor.floor]
-                color = CYAN if index < world.sequence_progress else GOLD
-                self._draw_puzzle_prop('sensor', x, y - 3, 42, 17, index < world.sequence_progress)
-                self.small.draw(x - 4, y + 19, str(index + 1), color)
-            x = stage.sequence.door.x - self.camera_x
-            y = self.floor_y[stage.sequence.door.floor]
-            draw_grounded(self.gate_art, GATE_FRAMES[world.sequence_unlocked], x, y, 112)
-            self.small.draw(x - 35, y + 125, f'보안 {world.sequence_progress}/3', CYAN if world.sequence_unlocked else GOLD)
+            sequence = stage.sequence
+            door_x, door_y = sequence.door.x - cam, floor_y[sequence.door.floor]
+            for index, sensor in enumerate(sequence.sensors):
+                x, y = sensor.x - cam, floor_y[sensor.floor]
+                lit = world.sequence_unlocked or index < world.sequence_progress
+                # 발판마다 바닥 아래 파이프가 보안문으로 이어진다. 순서대로 밟은 발판의 파이프에 불이 들어온다.
+                depth = 10 + index * 7
+                end_x = door_x - 16 + index * 16
+                self._pipe(((x, y - 4), (x, y - depth), (end_x, y - depth), (end_x, door_y + 4)), lit, now)
+                self._draw_puzzle_prop('sensor', x, y - 8, 58, 24, lit)
+                self.small.draw(x - 4, y + 24, str(index + 1), CYAN if lit else GOLD)
+            draw_grounded(self.gate_art, GATE_FRAMES[world.sequence_unlocked], door_x, door_y, 112)
+            for index in range(len(sequence.sensors)):
+                lamp = CYAN if world.sequence_unlocked or index < world.sequence_progress else (60, 52, 44)
+                self._disc(door_x - 16 + index * 16, door_y + 124, 5, lamp)
+            self.small.draw(door_x - 30, door_y + 142, '순서 보안문', CYAN if world.sequence_unlocked else GOLD)
 
         if stage.sync_gate is not None:
             gate = stage.sync_gate
-            for sensor, label, active in ((gate.player_sensor, '본체', world.sync_player_time),
-                                          (gate.echo_sensor, '분신', world.sync_echo_time)):
-                x, y = sensor.x - self.camera_x, self.floor_y[sensor.floor]
-                color = CYAN if active is not None or world.sync_unlocked else GOLD
-                self._draw_puzzle_prop('sync', x, y, 68, 72,
-                                       active is not None or world.sync_unlocked)
-                line(x, y, x, y + 70, color)
-                self.small.draw(x - 15, y + 82, label, color)
-            x, y = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
-            draw_grounded(self.gate_art, GATE_FRAMES[world.sync_unlocked], x, y, 112)
-            self.small.draw(x - 30, y + 125, '동시 통과', CYAN if world.sync_unlocked else GOLD)
+            door_x, door_y = gate.door.x - cam, floor_y[gate.door.floor]
+            junction_x = (door_x + gate.player_sensor.x - cam) / 2
+            junction_y = door_y + 40
+            for sensor, pressed, label in ((gate.player_sensor, world.sync_pressed[0], '본체 발판'),
+                                           (gate.echo_sensor, world.sync_pressed[1], '분신 발판')):
+                x, y = sensor.x - cam, floor_y[sensor.floor]
+                lit = pressed or world.sync_unlocked
+                self._pipe(((x, y + 4), (junction_x, y + 4), (junction_x, junction_y)), lit, now)
+                draw_grounded(self.plate_art, PLATE_FRAMES[lit], x, y, 13)
+                self.small.draw(x - 28, y + 26, label, CYAN if lit else GOLD)
+            self._pipe(((junction_x, junction_y), (door_x + 24, junction_y)), world.sync_unlocked, now)
+            self._gear(junction_x, junction_y, 13, now * (5 if world.sync_unlocked else 0.3), all(world.sync_pressed) or world.sync_unlocked)
+            draw_grounded(self.gate_art, GATE_FRAMES[world.sync_unlocked], door_x, door_y, 112)
+            self.small.draw(door_x - 30, door_y + 125, '동시 발판문', CYAN if world.sync_unlocked else GOLD)
 
+        if stage.hidden_hazards and echo is not None and echo.elevator_target is None:
+            # 분신의 빛: 같은 층은 곁을, 바로 위층에서는 아래층 바닥을 원뿔 모양으로 비춘다.
+            ex, ey = echo.x - cam, floor_y[echo.floor]
+            light = (130, 240, 230)
+            if any(h.floor == echo.floor for h in stage.hidden_hazards):
+                self._polygon(((ex, ey + 70), (ex - 120, ey), (ex + 120, ey)),
+                              ((*light, 90), (*light, 12), (*light, 12)))
+            if echo.floor > 0 and any(h.floor == echo.floor - 1 for h in stage.hidden_hazards):
+                below = floor_y[echo.floor - 1]
+                self._polygon(((ex, ey + 40), (ex - LIGHT_BELOW, below), (ex + LIGHT_BELOW, below)),
+                              ((*light, 110), (*light, 18), (*light, 18)))
         for hazard in stage.hidden_hazards:
             if world.hazard_lit(hazard):
-                x, y = hazard.x - self.camera_x, self.floor_y[hazard.floor]
-                self._draw_puzzle_prop('hazard', x, y - 4, 45, 22)
-                self.small.draw(x - 15, y + 22, '함정', RED)
+                x, y = hazard.x - cam, floor_y[hazard.floor]
+                self._draw_puzzle_prop('hazard', x, y - 6, 48, 24)
+                self.small.draw(x - 15, y + 24, '가시', RED)
+
+        plate = world.taunt_plate()
+        if plate is not None and any(enemy.spawn.point == stage.guard for enemy in world.enemies):
+            px, py = plate.x - cam, floor_y[plate.floor]
+            gx = stage.guard.x - cam
+            taunted = echo is not None and world._near(echo, plate, PLATE_RANGE)
+            # 도발 발판은 파이프로 수호자 발밑 톱니에 이어진다. 분신이 서면 톱니가 돌고 수호자가 분신을 노린다.
+            self._pipe(((px, py - 8), (gx, py - 8)), taunted, now)
+            self._gear(gx, py - 8, 15, now * (5 if taunted else 0.3), taunted)
+            draw_grounded(self.plate_art, PLATE_FRAMES[taunted], px, py, 13)
+            self.small.draw(px - 28, py - 22, '도발 발판', CYAN if taunted else GOLD)
 
         if (stage.guard is not None and world.index != 2
                 and any(enemy.spawn.point == stage.guard for enemy in world.enemies)):
-            x, y = stage.guard.x - self.camera_x, self.floor_y[stage.guard.floor]
+            x, y = stage.guard.x - cam, floor_y[stage.guard.floor]
             color = CYAN if world.guard_open_time > 0 else RED
             self.small.draw(x - 40, y + 180, '지나가세요!' if world.guard_open_time > 0 else '경비 구간', color)
 
         if stage.watch_gate is not None:
             gate = stage.watch_gate
-            x, y = gate.focus.x - self.camera_x, self.floor_y[gate.focus.floor]
-            color = CYAN if world.watch_active else GOLD
-            line(x - 65, y + 10, x + 65, y + 10, color)
-            self._draw_puzzle_prop('watch', x, y + 34, 70, 70, world.watch_active)
-            target_x = world.echo.actor.x - self.camera_x if world.watch_active else x + 50 * sin(world.time)
-            line(x, y + 82, target_x, y + 35, color)
-            self.small.draw(x - 35, y + 27, '감시 구역', color)
-            gx, gy = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
-            draw_grounded(self.gate_art, GATE_FRAMES[world.watch_active], gx, gy, 112)
-            self.small.draw(gx - 35, gy + 125, '시선 분산', color)
+            lamp_x = (gate.focus.x + gate.door.x) / 2 - cam
+            lamp_y = floor_y[gate.door.floor] + 105
+            if world.watch_active and echo is not None:
+                # 분신을 따라 빛이 돌아간다. 지키던 길은 어두워진다.
+                target_x, target_y, half = echo.x - cam, floor_y[echo.floor], 55
+                color = (255, 214, 120)
+            else:
+                target_x = gate.door.x - cam + sin(now * 1.6) * gate.zone * 0.35
+                target_y, half = floor_y[gate.door.floor], gate.zone
+                color = (255, 196, 96)
+            self._polygon(((lamp_x, lamp_y), (target_x - half, target_y), (target_x + half, target_y)),
+                          ((*color, 150), (*color, 34), (*color, 34)))
+            self._draw_puzzle_prop('watch', lamp_x, lamp_y - 30, 62, 64, True)
+            fx, fy = gate.focus.x - cam, floor_y[gate.focus.floor]
+            line(fx - WATCH_RANGE, fy + 2, fx + WATCH_RANGE, fy + 2, CYAN if world.watch_active else PURPLE)
+            self.small.draw(fx - 35, fy + 24, '감시 구역', CYAN if world.watch_active else PURPLE)
+            dx, dy = gate.door.x - cam, floor_y[gate.door.floor]
+            self.small.draw(dx - 40, dy + 150, '빛이 비추는 길' if not world.watch_active else '지나가세요!',
+                            GOLD if not world.watch_active else CYAN)
 
         if stage.isolation is not None:
             room = stage.isolation
-            for point, is_open, label in ((room.door, not world.isolation_closed, '격리실'),
-                                          (room.exit_gate, world.isolation_closed, '보안문')):
-                x, y = point.x - self.camera_x, self.floor_y[point.floor]
-                if is_open:
-                    draw_grounded(self.gate_art, GATE_FRAMES[True], x, y, 112)
-                else:
-                    self._draw_puzzle_prop('locked_gate', x, y, 90, 112)
-                self.small.draw(x - 25, y + 125, label, CYAN if is_open else GOLD)
-            x, y = room.lever.x - self.camera_x, self.floor_y[room.lever.floor]
-            self._draw_puzzle_prop('lever', x, y, 25, 39, world.isolation_closed)
-            self.small.draw(x - 25, y + 45, 'E 격리', CYAN if world.isolation_closed else GOLD)
+            x, y = room.door.x - cam, floor_y[room.door.floor]
+            # 레버를 당기면 도르래가 돌며 격리실 철창이 떨어진다.
+            moving = min(1.0, (now - world.isolation_changed_at) / 0.28)
+            lowered = moving if world.isolation_closed else 1 - moving
+            lx, ly = room.lever.x - cam, floor_y[room.lever.floor]
+            winch_y = y + 140
+            self._pipe(((lx + 12, ly + 14), (x, ly + 14), (x, winch_y)), world.isolation_closed, now)
+            draw_grounded(self.gate_art, GATE_FRAMES[True], x, y, 112)
+            if lowered > 0.02:
+                draw_grounded(self.gate_art, GATE_FRAMES[False], x, y + (1 - lowered) * 112, 112)
+            self._gear(x, winch_y, 16, lowered * 9, world.isolation_closed)
+            line(x, winch_y, x, y + 112 * (2 - lowered), (70, 70, 80))
+            self.small.draw(x - 25, y + 165, '격리실', CYAN if world.isolation_closed else GOLD)
+            self._draw_puzzle_prop('lever', lx, ly, 25, 39, world.isolation_closed)
+            self.small.draw(lx - 25, ly + 45, 'E 격리', CYAN if world.isolation_closed else GOLD)
+            gx, gy = room.exit_gate.x - cam, floor_y[room.exit_gate.floor]
+            if world.isolation_closed:
+                draw_grounded(self.gate_art, GATE_FRAMES[True], gx, gy, 112)
+            else:
+                self._draw_puzzle_prop('locked_gate', gx, gy, 90, 112)
+            self.small.draw(gx - 25, gy + 125, '보안문', CYAN if world.isolation_closed else GOLD)
 
         if stage.bridge is not None:
-            for point, remaining in zip(stage.bridge.points, world.bridge_timers):
-                x, y = point.x - self.camera_x, self.floor_y[point.floor]
-                if remaining > 0:
-                    self._draw_puzzle_prop('bridge', x, y - 27, 62, 34)
-                else:
-                    box(x - 28, y - 4, x + 28, y + 7, INK)
-                self.small.draw(x - 22, y + 19, '발판' if remaining > 0 else '빈 길', CYAN if remaining > 0 else MUTED)
+            bridge = stage.bridge
+            y = floor_y[bridge.floor]
+            left, right = bridge.left - cam, bridge.right - cam
+            # 바닥이 없는 낭떠러지. 분신이 지나간 칸에만 빛 발판이 생겼다가 흐려지며 사라진다.
+            box(left, y - 90, right, y + 4, (3, 5, 11))
+            box(left, y - 90, right, y - 60, (9, 14, 28))
+            line(left, y + 4, right, y + 4, (30, 44, 66))
+            texture = self.puzzle_art.texture
+            for index, remaining in enumerate(world.bridge_tiles):
+                if remaining <= 0:
+                    continue
+                x = bridge.left + (index + 0.5) * bridge.tile - cam
+                fade = min(1.0, remaining / 0.6)
+                canvas.SDL_SetTextureAlphaMod(texture, round(255 * fade))
+                self._draw_puzzle_prop('bridge', x, y - 30 + (1 - fade) * 8, bridge.tile + 6, 34)
+                canvas.SDL_SetTextureAlphaMod(texture, 255)
+            preview = world.recording.preview if world.recording is not None else None
+            if preview is not None and preview.floor == bridge.floor and world.bridge_tile_at(preview.x) is not None:
+                # 녹화 중에는 분신이 만들 발판 자리를 점선으로 미리 보여 준다.
+                tile = world.bridge_tile_at(preview.x)
+                x = bridge.left + tile * bridge.tile - cam
+                box(x + 4, y - 4, x + bridge.tile - 4, y, CYAN)
+            self.small.draw(left + 10, y + 24, '낭떠러지 · 분신의 빛 발판만 밟을 수 있음', CYAN)
 
         if stage.lift is not None:
             lift = stage.lift
-            x, y = lift.weight.x - self.camera_x, self.floor_y[lift.weight.floor]
-            active = world.echo is not None and world._near(world.echo.actor, lift.weight, 22)
-            self._draw_puzzle_prop('lift_weight', x, y - 3, 56, 23, active)
-            self.small.draw(x - 32, y + 20, '균형 발판', CYAN if active else GOLD)
-            x = lift.platform.x - self.camera_x
-            low = self.floor_y[lift.platform.floor]
-            high = self.floor_y[lift.platform.floor + 1]
-            y = low + (high - low) * world.lift_progress
-            self._draw_puzzle_prop('lift_platform', x, y - 19, 70, 24)
-            self.small.draw(x - 22, y + 16, '승강', CYAN)
+            wx, px = lift.weight.x - cam, lift.platform.x - cam
+            low, high = floor_y[lift.platform.floor], floor_y[lift.platform.floor + 1]
+            weighted = echo is not None and world._near(echo, lift.weight, 22)
+            progress = world.lift_progress
+            platform_y = low + (high - low) * progress
+            weight_y = low - 6 * (1 if weighted else 0) - 10 * progress
+            # 도르래 저울: 분신이 균형 발판(추)을 누르면 사슬이 당겨져 본체 쪽 발판이 위층으로 오른다.
+            pulley_x, pulley_y = (wx + px) / 2, high + 150
+            for end_x, end_y in ((wx, weight_y + 22), (px, platform_y + 20)):
+                line(pulley_x, pulley_y, end_x, end_y, (92, 92, 104))
+                line(pulley_x + 1, pulley_y, end_x + 1, end_y, (40, 40, 48))
+            self._gear(pulley_x, pulley_y, 18, progress * 12 + (now * 0.5 if weighted else 0), weighted)
+            self._draw_puzzle_prop('lift_weight', wx, weight_y - 3, 60, 25, weighted)
+            self.small.draw(wx - 32, weight_y + 26, '균형 발판', CYAN if weighted else GOLD)
+            self._draw_puzzle_prop('lift_platform', px, platform_y - 19, 74, 26, weighted or world.lift_riding)
+            self.small.draw(px - 22, platform_y + 18, '승강', CYAN if weighted else GOLD)
 
         for elevator in stage.elevators:
             x = elevator.x - self.camera_x
@@ -831,6 +994,11 @@ class View:
             self._avatar(self.echo, self.echo_walk, actor, opacity=255)
             return
         floor = self._actor_floor_y(actor) + actor.jump_height
+        if monster_kind == 'crawler' and actor.web_time > 0:
+            anchor_x = actor.web_anchor_x - self.camera_x
+            anchor_y = self._actor_floor_y(actor) + 230
+            line(anchor_x, anchor_y, actor.x, floor + 34, WHITE)
+            box(anchor_x - 3, anchor_y - 3, anchor_x + 3, anchor_y + 3, GOLD)
         faces = 1 if monster_kind == 'broken_jester' else -1
         self.monster_echo_walk[monster_kind].draw(actor, floor, opacity=opacity, faces=faces)
 
@@ -970,7 +1138,7 @@ class View:
         self.small.draw(118, 638, f'EXP  {gained} / {needed}' if needed else 'EXP  MAX', MUTED)
         self._draw_minimap(world)
         self.small.draw(340, 684, '상태', MUTED)
-        color, label = (CYAN, '녹화 중 · 시간 정지') if world.recording else (WHITE, '본체 조작 · 일반 진행')
+        color, label = (CYAN, '녹화 중 · 게임 진행') if world.recording else (WHITE, '본체 조작 · 일반 진행')
         self.body.draw(340, 653, label, color)
         self.small.draw(557, 684, '무기', MUTED)
         self.small.draw(557, 653, WEAPONS[world.weapon_index].name, GOLD)
@@ -1121,8 +1289,8 @@ class View:
             marker(stage.isolation.door, GOLD)
             marker(stage.isolation.exit_gate, GOLD)
         if stage.bridge:
-            for point in stage.bridge.points:
-                marker(point, CYAN, 1)
+            for x in range(stage.bridge.left, stage.bridge.right, stage.bridge.tile):
+                marker(Point(x + stage.bridge.tile / 2, stage.bridge.floor), (40, 60, 90), 1)
         if stage.lift:
             marker(stage.lift.platform, CYAN)
             marker(stage.lift.weight, GOLD)
@@ -1242,13 +1410,14 @@ class View:
                 self.body.draw(x + 140, y, what, WHITE)
         elif menu.guide_page == 1:
             lines = (
-                ('분신 녹화', 'C로 행동을 녹화합니다. 녹화 중 적과 장치의 시간은 멈춥니다.'),
+                ('분신 녹화', 'C로 행동을 녹화합니다. 녹화 중에도 적과 장치가 움직입니다.'),
                 ('분신 재현', '녹화한 움직임이 재현되는 동안 본체를 따로 조작하세요.'),
+                ('분신 피격', '분신이 맞으면 사라지지 않고 피해의 30%가 본체에 전달됩니다.'),
                 ('함께 돌파', '분신으로 발판을 누르고 적을 유인하거나 감지 장치를 작동하세요.'),
                 ('전투와 출구', 'A는 강한 근거리 베기, S는 약하지만 더 긴 찌르기입니다.'),
-                ('몬스터 분신', '일반 몬스터를 처치하면 마지막으로 처치한 몬스터를 선택할 수 있습니다.'),
-                ('분신의 기능', '외형만 달라지며 발판 작동, 유인, 녹화 재현은 기본 분신과 같습니다.'),
-                ('알아두기', '몬스터 고유 공격이나 능력은 분신에 적용되지 않습니다. 보스는 획득할 수 없습니다.'),
+                ('몬스터 분신', '일반 몬스터 분신은 최대 2종 보유하며 기본 분신은 항상 사용할 수 있습니다.'),
+                ('거미 분신', '던전 벽면에서 ↑↓를 누르면 벽을 타고, F로 거미줄 이동을 녹화합니다.'),
+                ('알아두기', '다른 몬스터 고유 능력은 아직 없으며 보스는 분신으로 얻을 수 없습니다.'),
             )
             for row, (label, description) in enumerate(lines):
                 y = 490 - row * 50
@@ -1280,16 +1449,42 @@ class View:
                 self.body.draw(x + 85, y + 16, MONSTER_NAMES.get(kind, '갑옷 경비병'), GOLD)
                 self.small.draw(x + 85, y - 14, description, WHITE)
             self.small.draw(100, 145, '일반 몬스터 분신: 외형이 바뀌며 기본 분신과 같은 기능을 사용합니다.', MUTED)
-            self.small.draw(100, 119, '몬스터 고유 능력은 적용되지 않으며 보스는 분신으로 획득할 수 없습니다.', MUTED)
+            self.small.draw(100, 119, '거미 분신: ↑↓ 벽 타기 · F 거미줄 이동 / 보스 획득 불가', MUTED)
 
     def draw_echo_selector(self, world):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
-        box(300, 225, 820, 495, INK)
-        box(300, 225, 820, 495, LINE, filled=False)
-        self.heading.draw(335, 452, '분신 선택', WHITE)
-        self.body.draw(345, 400, '1. 기본 분신', CYAN)
-        self.body.draw(345, 355, f'2. 몬스터 분신 · {MONSTER_NAMES[world.monster_echo]}', GOLD)
-        self.small.draw(335, 270, '숫자키로 선택   Esc 또는 Backspace 취소', WHITE)
+        self.echo_selection_panel.draw(WIDTH / 2, HEIGHT / 2, 1000, 510)
+        heading = '분신 선택'
+        self.heading.draw((WIDTH - text_width(self.heading, heading)) / 2, 554, heading, WHITE)
+        positions = (275, 560, 845)
+        self.echo.draw(positions[0], 360, 155, 175)
+        for index, center in enumerate(positions):
+            if index == 0:
+                label, number, color = '기본 분신', '1', CYAN
+            elif index <= len(world.monster_echoes):
+                kind = world.monster_echoes[index - 1]
+                walk = self.monster_echo_walk[kind]
+                draw_region(walk.image, walk.frames[0], center - 85, 295, 170, 150)
+                label, number, color = MONSTER_NAMES[kind], str(index + 1), GOLD
+            else:
+                label, number, color = '빈 슬롯', str(index + 1), MUTED
+                self.body.draw(center - text_width(self.body, '+') / 2, 360, '+', MUTED)
+            self.body.draw(center - text_width(self.body, number) / 2, 488, number, color)
+            self.body.draw(center - text_width(self.body, label) / 2, 255, label, color)
+        hint = '숫자키 1 ~ 3 선택   ·   Esc / Backspace 취소'
+        self.small.draw((WIDTH - text_width(self.small, hint)) / 2, 157, hint, WHITE)
+
+    def draw_echo_replacement(self, world):
+        box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
+        box(265, 180, 855, 520, INK)
+        box(265, 180, 855, 520, LINE, filled=False)
+        self.heading.draw(300, 480, '몬스터 분신 교체', WHITE)
+        self.body.draw(300, 435, f'새 분신: {MONSTER_NAMES[world.pending_monster_echo]}', GOLD)
+        self.small.draw(300, 400, '교체할 몬스터 분신을 선택하세요.', WHITE)
+        for slot, kind in enumerate(world.monster_echoes):
+            self.body.draw(310, 355 - slot * 42, f'{slot + 1}. {MONSTER_NAMES[kind]} 교체', WHITE)
+        self.body.draw(310, 260, '3. 새 분신 포기', CYAN)
+        self.small.draw(300, 215, '기본 분신은 교체되지 않습니다.  Esc 포기', MUTED)
 
     def draw_boss_selector(self, selector):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
@@ -1301,7 +1496,7 @@ class View:
             boss = next(enemy for enemy in stage.enemies if enemy.kind in BOSS_KINDS)
             y = 410 - option * 48
             color = CYAN if option == selector.index else WHITE
-            self.body.draw(345, y, f'{option + 1}. {MONSTER_NAMES[boss.kind]}  ·  {stage_index + 1}스테이지', color)
+            self.body.draw(345, y, f'{option + 1}. {MONSTER_NAMES[boss.kind]}  ·  {stage_group_index(stage_index) + 1}스테이지', color)
         if not selector.stages:
             self.body.draw(345, 410, '이동할 보스방이 없습니다.', MUTED)
         self.small.draw(335, 250, '↑ ↓ 선택   Enter 이동   숫자키 바로 이동   Esc 취소', GOLD)
@@ -1311,9 +1506,9 @@ class View:
         box(300, 225, 820, 495, INK)
         box(300, 225, 820, 495, LINE, filled=False)
         self.heading.draw(335, 452, '스테이지 바로 이동', WHITE)
-        self.body.draw(335, 401, f'이동할 번호를 입력하세요 (1~{len(STAGES)})', MUTED)
+        self.body.draw(335, 401, f'이동할 번호를 입력하세요 (1~{len(STAGE_GROUPS)})', MUTED)
         self.display.draw(335, 340, entry if entry else '_', CYAN)
-        if entry and not 1 <= int(entry) <= len(STAGES):
+        if entry and not 1 <= int(entry) <= len(STAGE_GROUPS):
             self.small.draw(335, 300, '범위 안의 번호를 입력하세요.', RED)
         self.small.draw(335, 255, 'Enter 이동   Backspace 지우기   Esc 취소', GOLD)
 

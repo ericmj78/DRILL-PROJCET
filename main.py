@@ -2,16 +2,27 @@ from time import perf_counter
 
 from pico2d import (
     SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_b, SDLK_BACKSPACE, SDLK_c,
-    SDLK_DOWN, SDLK_e, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
+    SDLK_DOWN, SDLK_e, SDLK_f, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
     SDLK_s, SDLK_SPACE, SDLK_UP, clear_canvas, close_canvas, delay, get_events,
     hide_lattice, open_canvas, update_canvas,
 )
 from pico2d import pico2d as canvas
 
-from stages import BOSS_KINDS, STAGES, STEP
+from stages import BOSS_KINDS, STAGES, STAGE_GROUPS, STEP, next_section_in_stage, stage_group_index
 from title_menu import BossSelector, TitleMenu
 from view import HEIGHT, WIDTH, View
 from world import Motion, World
+
+
+def advance_stage_section(world):
+    """Continue a merged stage while preserving the player's progress."""
+    following = next_section_in_stage(world.index) if world.result == 'cleared' else None
+    if following is None:
+        return world
+    next_world = World(following, weapon_index=world.weapon_index, xp=world.xp,
+                       monster_echoes=world.monster_echoes)
+    next_world.health = min(world.health, next_world.max_health)
+    return next_world
 
 
 def main():
@@ -34,6 +45,7 @@ def main():
         pressed = set()
         pending_stairs = 0
         pending_jump = False
+        pending_web = False
         pending_attack = False
         accumulator = 0.0
         previous = perf_counter()
@@ -58,7 +70,7 @@ def main():
                         return
                     if action == 'start' or action and action.startswith('stage:'):
                         index = int(action.split(':')[1]) if ':' in action else 0
-                        world = World(index, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
+                        world = World(index, weapon_index=world.weapon_index, xp=world.xp, monster_echoes=world.monster_echoes)
                         screen = 'play'
                         pressed.clear()
                         accumulator = 0.0
@@ -78,11 +90,24 @@ def main():
                 if event.type != SDL_KEYDOWN:
                     continue
                 key = event.key
+                if screen == 'play' and world.pending_monster_echo:
+                    if key in (SDLK_0 + 1, SDLK_0 + 2):
+                        world.resolve_monster_echo(key - SDLK_0 - 1)
+                    elif key in (SDLK_0 + 3, SDLK_ESCAPE, SDLK_BACKSPACE):
+                        world.resolve_monster_echo()
+                    pressed.clear()
+                    pending_stairs = 0
+                    pending_jump = False
+                    pending_attack = False
+                    accumulator = 0.0
+                    continue
                 if screen == 'play' and world.echo_selecting:
                     if key == SDLK_0 + 1:
                         world.start_recording()
-                    elif key == SDLK_0 + 2:
-                        world.start_recording(world.monster_echo)
+                    elif SDLK_0 + 2 <= key <= SDLK_0 + 3:
+                        slot = key - SDLK_0 - 2
+                        if slot < len(world.monster_echoes):
+                            world.start_recording(world.monster_echoes[slot])
                     elif key in (SDLK_ESCAPE, SDLK_BACKSPACE):
                         world.echo_selecting = False
                     pressed.clear()
@@ -96,7 +121,7 @@ def main():
                     if choice == 'cancel':
                         boss_selector = None
                     elif choice is not None:
-                        world = World(choice, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
+                        world = World(choice, weapon_index=world.weapon_index, xp=world.xp, monster_echoes=world.monster_echoes)
                         world.warp_to_boss()
                         screen = 'play'
                         boss_selector = None
@@ -107,15 +132,30 @@ def main():
                         stage_entry = None
                     elif key == SDLK_BACKSPACE:
                         stage_entry = stage_entry[:-1]
-                    elif SDLK_0 <= key <= SDLK_9 and len(stage_entry) < len(str(len(STAGES))):
+                    elif SDLK_0 <= key <= SDLK_9 and len(stage_entry) < len(str(len(STAGE_GROUPS))):
                         stage_entry += str(key - SDLK_0)
                     elif key == SDLK_RETURN and stage_entry:
                         number = int(stage_entry)
-                        if 1 <= number <= len(STAGES):
-                            world = World(number - 1, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
+                        if 1 <= number <= len(STAGE_GROUPS):
+                            world = World(STAGE_GROUPS[number - 1][0], weapon_index=world.weapon_index, xp=world.xp, monster_echoes=world.monster_echoes)
                             screen = 'play'
                             stage_entry = None
                     accumulator = 0.0
+                    continue
+                if key in (canvas.SDLK_PLUS, canvas.SDLK_KP_PLUS, canvas.SDLK_EQUALS):
+                    view.toggle_free_camera()
+                    pressed.clear()
+                    pending_stairs = 0
+                    pending_jump = False
+                    pending_attack = False
+                    accumulator = 0.0
+                    continue
+                if view.free_camera:
+                    if key == SDLK_ESCAPE:
+                        view.toggle_free_camera()
+                        pressed.clear()
+                    elif key in (SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN):
+                        pressed.add(key)
                     continue
                 if key == SDLK_p:
                     stage_entry = ''
@@ -139,8 +179,9 @@ def main():
                     accumulator = 0.0
                     continue
                 if key == SDLK_r or (key == SDLK_RETURN and world.result == 'cleared'):
-                    index = world.index if key == SDLK_r else (world.index + 1) % len(STAGES)
-                    world = World(index, weapon_index=world.weapon_index, xp=world.xp, monster_echo=world.monster_echo)
+                    group = stage_group_index(world.index)
+                    index = STAGE_GROUPS[group if key == SDLK_r else (group + 1) % len(STAGE_GROUPS)][0]
+                    world = World(index, weapon_index=world.weapon_index, xp=world.xp, monster_echoes=world.monster_echoes)
                     pressed.clear()
                     pending_stairs = 0
                     pending_jump = False
@@ -156,9 +197,11 @@ def main():
                     pending_jump = True
                 elif key in (SDLK_UP, SDLK_DOWN):
                     pending_stairs = 1 if key == SDLK_UP else -1
+                    if world.recording is not None and world.recording.monster_kind == 'crawler':
+                        pressed.add(key)
                 elif key == SDLK_c and key not in pressed:
                     pressed.add(key)
-                    if (world.recording is None and world.monster_echo is not None
+                    if (world.recording is None and world.monster_echoes
                             and world.player.elevator_target is None
                             and world.player.jump_time <= 0 and not world.lift_riding):
                         world.echo_selecting = True
@@ -173,6 +216,10 @@ def main():
                 elif key == SDLK_e and key not in pressed:
                     pressed.add(key)
                     world.toggle_lever()
+                elif key == SDLK_f and key not in pressed:
+                    pressed.add(key)
+                    if world.recording is not None and world.recording.monster_kind == 'crawler':
+                        pending_web = True
                 elif SDLK_0 <= key <= SDLK_4:
                     world.select_weapon(key - SDLK_0)
                 elif key in (SDLK_a, SDLK_s) and world.recording is None:
@@ -181,9 +228,22 @@ def main():
             while accumulator >= STEP:
                 if screen == 'play' and stage_entry is None and boss_selector is None:
                     horizontal = int(SDLK_RIGHT in pressed) - int(SDLK_LEFT in pressed)
-                    world.step(Motion(horizontal, pending_stairs, pending_jump), pending_attack)
+                    if view.free_camera:
+                        vertical = int(SDLK_UP in pressed) - int(SDLK_DOWN in pressed)
+                        view.move_free_camera(world, horizontal, vertical, STEP)
+                        world.step(Motion())
+                    else:
+                        stairs = pending_stairs
+                        if world.recording is not None and world.recording.monster_kind == 'crawler':
+                            stairs = int(SDLK_UP in pressed) - int(SDLK_DOWN in pressed)
+                        world.step(Motion(horizontal, stairs, pending_jump, pending_web), pending_attack)
+                    next_world = advance_stage_section(world)
+                    if next_world is not world:
+                        world = next_world
+                        pressed.clear()
                 pending_stairs = 0
                 pending_jump = False
+                pending_web = False
                 pending_attack = False
                 accumulator -= STEP
 
@@ -191,6 +251,8 @@ def main():
             view.draw(world, screen, menu)
             if screen == 'play' and world.echo_selecting:
                 view.draw_echo_selector(world)
+            if screen == 'play' and world.pending_monster_echo:
+                view.draw_echo_replacement(world)
             if stage_entry is not None:
                 view.draw_stage_selector(stage_entry)
             if boss_selector is not None:

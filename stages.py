@@ -62,8 +62,10 @@ class SyncGate:
 
 @dataclass(frozen=True)
 class WatchGate:
+    """감시등. 평소에는 door 주변 길을 비추고, 분신이 focus 근처에 오면 분신을 따라 돌아간다."""
     focus: Point
-    door: Point
+    door: Point          # 감시등이 지키는 길의 가운데
+    zone: int = 80       # 빛이 덮는 반폭. 이 안에 들어간 본체는 들킨다.
 
 
 @dataclass(frozen=True)
@@ -76,8 +78,12 @@ class IsolationRoom:
 
 @dataclass(frozen=True)
 class EchoBridge:
-    points: tuple[Point, ...]
-    echo_floor: int
+    """낭떠러지. 분신이 지나간 자리에만 잠깐 빛 발판이 생긴다."""
+    floor: int
+    left: int
+    right: int
+    tile: int = 60        # 발판 한 칸의 폭
+    life: float = 2.2     # 분신이 지나간 뒤 발판이 남아 있는 시간
 
 
 @dataclass(frozen=True)
@@ -171,9 +177,9 @@ class Stage:
 STAGES = (
     Stage(
         '01  잔향의 문',
-        'A 문을 지나면 문이 열린 상태로 유지됩니다. B 발판을 누르도록 분신을 녹화하세요.',
-        2, Point(112, 0), Point(2100, 1),
-        elevators=(Stair(1950, 0),),
+        'A 발판을 밟으면 문이 열립니다. B 발판을 누르도록 분신을 녹화하세요.',
+        3, Point(112, 0), Point(2100, 2),
+        elevators=(Stair(1950, 0), Stair(350, 1)),
         gates=(
             Gate('A', Point(267, 0), Point(740, 0)),
             Gate('B', Point(430, 0), Point(1400, 0)),
@@ -223,9 +229,10 @@ STAGES = (
     ),
     Stage(
         '04  반대편 발판',
-        '감지 지점은 1→2→3 순서로만 밟아야 합니다. 공중에서는 감지되지 않으니 점프를 녹화하세요.',
+        '1→2→3 순서로 발판을 밟아 보안문을 여세요. 꼭대기 층 낭떠러지는 분신이 지나간 자리만 밟을 수 있습니다.',
         4, Point(340, 0), Point(2100, 3),
-        elevators=(Stair(1980, 0), Stair(1980, 1), Stair(1980, 2)),
+        elevators=(Stair(1980, 0), Stair(1980, 1), Stair(300, 2)),
+        bridge=EchoBridge(3, 700, 1500),
         gates=(Gate('A', Point(160, 0), Point(900, 0)),),
         enemies=(
             EnemySpawn('magic_book', Point(700, 0), (620, 780)),
@@ -277,9 +284,9 @@ STAGES = (
     ),
     Stage(
         '07  두 번째 잔향',
-        '분신은 B 발판을 밟은 뒤 아래층 감지선까지 가야 합니다. 본체는 위층 감지선을 함께 통과하세요.',
-        2, Point(120, 0), Point(105, 1),
-        stairs=(Stair(1300, 0),),
+        '분신은 B 발판을 밟은 뒤 아래층 동시 발판으로 가야 합니다. 두 발판을 함께 밟으면 문이 열립니다.',
+        5, Point(120, 0), Point(2100, 4),
+        stairs=(Stair(1300, 0), Stair(150, 1), Stair(1850, 2), Stair(150, 3)),
         gates=(
             Gate('A', Point(245, 0), Point(540, 0)),
             Gate('B', Point(1490, 0), Point(1050, 1)),
@@ -332,3 +339,20 @@ STAGES = (
         enemy_scale=LATE_STAGE_SCALE,
     ),
 )
+
+# One visible stage may contain multiple connected map sections.
+STAGE_GROUPS = ((0,), (1, 2), (3,), (4, 5), (6,), (7, 8))
+STAGE_TITLES = (
+    '01  잔향의 문', '02  사냥꾼과 간수', '03  반대편 발판',
+    '04  격리실과 대마녀', '05  두 번째 잔향', '06  마지막 잔향',
+)
+
+
+def stage_group_index(section_index):
+    return next(i for i, group in enumerate(STAGE_GROUPS) if section_index in group)
+
+
+def next_section_in_stage(section_index):
+    group = STAGE_GROUPS[stage_group_index(section_index)]
+    position = group.index(section_index)
+    return group[position + 1] if position + 1 < len(group) else None

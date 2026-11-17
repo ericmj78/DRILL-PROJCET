@@ -8,7 +8,7 @@ import sys
 
 import boss_skills
 from stages import BOSS_KINDS, STAGES, STEP
-from world import Motion, World
+from world import Actor, Echo, Motion, World
 
 
 class Bot:
@@ -21,6 +21,8 @@ class Bot:
         return self.w.recording.preview if self.w.recording else self.w.player
 
     def tick(self, horizontal=0, stairs=0, jump=False, attack=False):
+        while self.w.pending_monster_echo:
+            self.w.resolve_monster_echo()
         self.w.step(Motion(horizontal, stairs, jump), attack)
         self.frames += 1
 
@@ -156,6 +158,8 @@ def stage_1(b):
     b.rec()
     b.go(1950, slash=True)
     b.up()
+    b.go(350)
+    b.up()
     b.go(2100, slash=True)
 
 
@@ -235,8 +239,15 @@ def stage_4(b):
     b.go(1890)
     b.kill('witch')
     b.go(1980)
-    for _ in range(3):
-        b.up()
+    b.up()
+    b.up()
+    b.go(300)
+    b.up()
+    b.go(650)       # 낭떠러지 앞에서 분신이 건너가며 빛 발판을 만들게 한다
+    b.rec()
+    b.go(1560)
+    b.rec()
+    b.wait(0.4)     # 분신 바로 뒤를 따라간다
     b.go(2100)
 
 
@@ -313,13 +324,19 @@ def stage_7(b):
     b.down()
     b.go(1490)      # B 발판: 본체가 B 문에 들어설 때까지
     b.wait(0.3)
-    b.go(790)       # 아래층 감지선을 왼쪽으로 통과
+    b.go(800)       # 아래층 동시 발판에 서서 기다린다
     b.rec()
-    b.go(860)
-    b.until(lambda w: w.echo.actor.x < 900)        # 아래층 분신과 나란히 감지선을 넘는다
+    b.go(800)       # 위층 동시 발판에서 분신이 도착하기를 기다린다
+    b.until(lambda w: w.sync_unlocked, limit=6)
     b.go(520)
     b.kill('cursed_lantern')
-    b.go(105)
+    b.go(150)
+    b.up()
+    b.go(1850)
+    b.up()
+    b.go(150)
+    b.up()
+    b.go(2100)
 
 
 @solution(8)
@@ -459,8 +476,51 @@ def check_late_stage_monsters():
         assert kinds and kinds <= allowed, (stage.title, kinds)
 
 
+def check_puzzles():
+    """기획서 그림대로 바꾼 장치가 분신 없이는 통과되지 않는지 확인한다."""
+    # 감시등: 분신 없이 빛이 비추는 길로 들어가면 들켜서 밀려난다.
+    w = World(1)
+    gate = w.stage.watch_gate
+    w.enemies = []
+    w.player.floor, w.player.x = gate.door.floor, gate.door.x - gate.zone - 40
+    for _ in range(round(3 / STEP)):
+        w.step(Motion(1))
+    assert w.player.x < gate.door.x and w.health < w.max_health, ('감시등을 그냥 지나갔습니다', w.player.x)
+
+    # 낭떠러지: 분신이 만든 빛 발판 없이 들어가면 떨어져 앞쪽으로 돌아온다.
+    w = World(3)
+    bridge = w.stage.bridge
+    w.enemies = []
+    w.player.floor, w.player.x = bridge.floor, bridge.left - 30
+    for _ in range(round(2 / STEP)):
+        w.step(Motion(1))
+    assert w.player.x < bridge.left and w.health < w.max_health, ('발판 없이 낭떠러지를 건넜습니다', w.player.x)
+
+    # 동시 발판: 본체 발판만 밟아서는 열리지 않는다.
+    w = World(6)
+    sync = w.stage.sync_gate
+    w.enemies = []
+    w.player.floor, w.player.x = sync.player_sensor.floor, sync.player_sensor.x
+    for _ in range(round(1 / STEP)):
+        w.step(Motion())
+    assert w.sync_pressed[0] and not w.sync_unlocked, '본체 혼자 동시 발판문을 열었습니다'
+
+    # 도발 발판: 분신이 서 있으면 수호자는 가까운 본체 대신 분신을 노린다.
+    w = World(8)
+    plate = w.taunt_plate()
+    guard = next(e for e in w.enemies if e.spawn.point == w.stage.guard)
+    w.enemies = [guard]
+    w.player.floor, w.player.x = plate.floor, w.stage.guard.x + 40
+    w.echo = Echo(Actor(plate.x, plate.floor), tuple([Motion()] * 120))
+    for _ in range(10):
+        w.step(Motion())
+    assert guard.target is w.echo.actor, '도발 발판의 분신을 노리지 않습니다'
+
+
 def main():
     check_balance()
+    check_puzzles()
+    print('OK   퍼즐 장치')
     check_boss_warp()
     check_late_stage_monsters()
     print('OK   밸런스 표')

@@ -145,11 +145,17 @@ def update(world, enemy) -> bool:
                 message = '잔향 기사의 돌진에 맞았습니다.' if enemy.spawn.kind == 'echo_knight' else '간수의 돌진에 맞았습니다.'
                 if world.hurt(skill.damage, message):
                     effects.append(Effect('crit-hit', player.x, player.floor, actor.facing, scale=0.8))
+            for echo in world.echo_actors():
+                if echo.floor == actor.floor and echo.jump_time == 0 and abs(echo.x - actor.x) < 36:
+                    world.hurt_echo(echo, skill.damage)
     elif skill.name == 'chain' and fired:
         player = world.player
         world.shake = max(world.shake, 0.15)
         if player.floor == actor.floor and 0 < (player.x - actor.x) * actor.facing < CHAIN_REACH:
             world.hurt(skill.damage, '간수의 쇠사슬에 맞았습니다.')
+        for echo in world.echo_actors():
+            if echo.floor == actor.floor and 0 < (echo.x - actor.x) * actor.facing < CHAIN_REACH:
+                world.hurt_echo(echo, skill.damage)
     elif skill.name == 'rockfall' and fired:
         # 바위 세 개가 표적 자리와 양옆에 차례로 떨어진다. 닿는 순간 터지고 화면이 흔들린다.
         for delay, offset in ((0.0, 0), (0.3, 130), (0.6, -130)):
@@ -180,6 +186,10 @@ def update_gravity(world, horizontal):
         world.gravity_field = None
         return
     player = world.player
+    if field.age >= field.warning:
+        for echo in world.echo_actors():
+            if echo.floor == field.floor and abs(echo.x - field.x) <= 18:
+                world.hurt_echo(echo, 3)
     if field.age < field.warning or player.floor != field.floor:
         field.captured = False
         return
@@ -227,4 +237,8 @@ def update_effects(world):
         dodged = effect.jumpable and player.jump_time > 0
         if player.floor == effect.floor and abs(player.x - effect.x) <= reach and not dodged:
             world.hurt(effect.damage, '보스의 스킬에 맞았습니다. 예고를 보고 피하세요.')
+        for echo in world.echo_actors():
+            if (echo.floor == effect.floor and abs(echo.x - effect.x) <= reach
+                    and not (effect.jumpable and echo.jump_time > 0)):
+                world.hurt_echo(echo, effect.damage)
     world.boss_effects = [effect for effect in world.boss_effects if effect.age < effect.life]

@@ -7,7 +7,7 @@ from pico2d import (
     SDLK_0, SDLK_9, SDLK_DOWN, SDLK_ESCAPE, SDLK_LEFT, SDLK_RETURN, SDLK_RIGHT, SDLK_SPACE, SDLK_UP, SDLK_b,
 )
 
-from stages import BOSS_KINDS, STAGES
+from stages import BOSS_KINDS, STAGES, STAGE_GROUPS, STAGE_TITLES
 
 MAIN = (
     ('start', '게임 시작'), ('stages', '스테이지 선택'), ('controls', '게임 안내 및 조작법'),
@@ -69,9 +69,9 @@ class TitleMenu:
             return [(action, label, (65, 350 - row * 55, 345, 398 - row * 55))
                     for row, (action, label) in enumerate(MAIN)]
         if self.page == 'stages':
-            return [(f'stage:{index}', stage.title,
+            return [(f'stage:{group[0]}', STAGE_TITLES[index],
                      (90 + index % 5 * 192, 400 - index // 5 * 150, 262 + index % 5 * 192, 520 - index // 5 * 150))
-                    for index, stage in enumerate(STAGES)] + [BACK]
+                    for index, group in enumerate(STAGE_GROUPS)] + [BACK]
         if self.page == 'settings':
             return [('volume_down', '−', (450, 438, 510, 490)),
                     ('volume_up', '+', (750, 438, 810, 490)),
@@ -144,8 +144,7 @@ if __name__ == '__main__':
     assert menu.handle(key(SDLK_RETURN)) == 'stages'
     menu.open('stages')
     menu.handle(key(SDLK_DOWN))           # 1번 카드 → 6번 카드
-    menu.handle(key(SDLK_RIGHT))
-    assert menu.handle(key(SDLK_RETURN)) == 'stage:6'
+    assert menu.handle(key(SDLK_RETURN)) == 'stage:7'
     menu.handle(key(SDLK_DOWN))           # 마지막 줄 아래는 '뒤로'
     assert menu.handle(key(SDLK_RETURN)) == 'back'
     assert menu.handle(key(SDLK_ESCAPE)) == 'back'
@@ -153,7 +152,7 @@ if __name__ == '__main__':
     left, bottom, right, top = menu.buttons()[2][2]
     menu.handle(Event(type=SDL_MOUSEMOTION, x=(left + right) / 2, y=(bottom + top) / 2))
     assert menu.index == 2
-    assert menu.handle(Event(type=SDL_MOUSEBUTTONDOWN, button=SDL_BUTTON_LEFT, x=left + 1, y=bottom + 1)) == 'stage:2'
+    assert menu.handle(Event(type=SDL_MOUSEBUTTONDOWN, button=SDL_BUTTON_LEFT, x=left + 1, y=bottom + 1)) == 'stage:3'
     assert menu.handle(Event(type=SDL_MOUSEBUTTONDOWN, button=SDL_BUTTON_LEFT, x=5, y=5)) is None
     menu.open('main')
     assert menu.handle(key(SDLK_ESCAPE)) == 'quit'
