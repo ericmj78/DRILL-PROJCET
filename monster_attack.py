@@ -57,7 +57,7 @@ ATTACKS = {
     # 외눈 유령: 떠오르며 움츠렸다가 눈에서 보랏빛 광선을 쏜다.
     'watcher': Attack(Pose(-12, 10, 0.86, 0.86, -8), Pose(6, 4, 1.12, 1.06, 6),
                       Fx('arcane-beam', 0, 0, 4, 50, 0.5, hold=0.30)),
-    # 여섯 다리 괴물: 납작 엎드렸다가 뛰어올라 앞발로 세 줄을 할퀸다.
+    # 거미: 몸을 낮췄다가 뛰어올라 앞발로 할퀸다.
     'crawler': Attack(Pose(-10, 0, 1.14, 0.78, -6), Pose(26, 0, 1.10, 0.90, 11),
                       Fx('claw-swipe', 0, 0.07, 6, 0, 0.9), hop=18),
     # 간수 보스: 크게 뒤로 젖혔다가 온몸으로 내려찍는다. 준비하는 동안 무기가 떨어져 내린다.
@@ -78,8 +78,15 @@ ATTACKS = {
     # 대마녀 보스: 높이 떠올라 상대 발밑에 마력을 모았다가 터뜨린다.
     'grand_witch': Attack(Pose(-9, 12, 0.96, 1.10, -13), Pose(11, 2, 1.08, 1.00, 11),
                           Fx('mana-burst', 0, 0.33, 62, 0, 1.0)),
+    'time_thief': Attack(Pose(-8, 0, 0.97, 1.04, -9), Pose(14, 1, 1.05, 0.97, 12),
+                         Fx('mana-burst', 0, 0.33, 40, 8, 0.65)),
+    'cursed_lantern': Attack(Pose(-8, 8, 0.96, 1.05, -10), Pose(15, 18, 1.06, 0.96, 13),
+                             Fx('magic-missile', 0.10, 0.87, 35, 45, 0.6)),
+    'broken_jester': Attack(Pose(-10, 0, 0.95, 1.07, -12), Pose(20, 0, 1.08, 0.95, 16),
+                            Fx('claw-swipe', 0, 0.07, 16, 12, 0.65)),
 }
 ATTACKS['magic_armor_guard'] = ATTACKS['magic_armor']
+ATTACKS['echo_knight'] = ATTACKS['magic_armor']
 
 
 def _blend(a: Pose, b: Pose, t: float) -> Pose:

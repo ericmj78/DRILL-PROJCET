@@ -74,7 +74,7 @@ class Bot:
 
     def kill(self, kind):
         """찌르기 거리에서 싸운다. 적이 공격을 준비하면 뒤로 빠졌다가 다시 찌른다."""
-        for _ in range(round(40 / STEP)):
+        for _ in range(round((60 if kind == 'echo_knight' else 40) / STEP)):
             targets = [e for e in self.w.enemies if e.spawn.kind == kind and e.actor.floor == self.me.floor]
             if not targets or self.w.result != 'playing':
                 return
@@ -264,34 +264,6 @@ def stage_5(b):
 
 @solution(6)
 def stage_6(b):
-    b.kill('magic_armor')
-    b.go(680)
-    b.up()
-    b.kill('magic_book')
-    b.go(680)
-    b.rec()
-    b.down()
-    b.go(1000)
-    b.wait(0.8)
-    b.rec()
-    b.go(1250)
-    b.until(lambda w: enemy(w, 'beast').x > 1720)   # 짐승이 오른쪽 끝에 있을 때
-    b.rec()
-    b.down()
-    b.go(1610)
-    b.wait(0.3)
-    b.rec()
-    b.go(1850)
-    b.down()
-    b.kill('witch')
-    b.go(2000)
-    for _ in range(3):
-        b.up()
-    b.go(2100)
-
-
-@solution(7)
-def stage_7(b):
     b.kill('magic_book')
     b.go(160)
     b.rec()
@@ -326,15 +298,15 @@ def stage_7(b):
     b.go(2100)
 
 
-@solution(8)
-def stage_8(b):
+@solution(7)
+def stage_7(b):
     b.go(400)
     b.rec()
     b.go(245)
     b.wait(0.4)
     b.rec()
     b.go(600)
-    b.kill('crawler')
+    b.kill('broken_jester')
     b.go(1300)
     b.up()
     b.rec()
@@ -346,12 +318,12 @@ def stage_8(b):
     b.go(860)
     b.until(lambda w: w.echo.actor.x < 900)        # 아래층 분신과 나란히 감지선을 넘는다
     b.go(520)
-    b.kill('watcher')
+    b.kill('cursed_lantern')
     b.go(105)
 
 
-@solution(9)
-def stage_9(b):
+@solution(8)
+def stage_8(b):
     b.go(380)
     b.rec()
     b.go(220)
@@ -364,10 +336,9 @@ def stage_9(b):
     b.wait(0.6)
     b.rec()
     b.go(870)
-    b.kill('crawler')
-    b.go(950)
+    b.go(950, slash=True)
     b.up()
-    b.kill('watcher')
+    b.kill('cursed_lantern')
     b.go(1000)
     b.rec()         # 첫 분신: 함정을 비추며 앞서 걷는다
     b.go(1850)
@@ -387,8 +358,8 @@ def stage_9(b):
     b.go(2100)
 
 
-@solution(10)
-def stage_10(b):
+@solution(9)
+def stage_9(b):
     b.go(350)
     b.rec()
     b.go(252)
@@ -396,14 +367,14 @@ def stage_10(b):
     b.rec()
     b.go(670)
     b.up()
-    b.until(lambda w: enemy(w, 'beast').x > 1050)  # 짐승이 B 발판에서 가장 멀 때
+    b.until(lambda w: enemy(w, 'broken_jester').x > 1050)  # 광대가 B 발판에서 멀 때
     b.rec()
     b.down()
     b.go(820)
     b.wait(1.5)
     b.rec()
     b.go(1060)
-    b.kill('watcher')
+    b.kill('cursed_lantern')
     b.go(1300)
     b.up()
     b.rec()
@@ -424,6 +395,9 @@ def stage_10(b):
     b.jump(1)
     b.go(1830)
     b.jump(1)
+    b.go(2000)
+    b.up()
+    b.kill('echo_knight')
     b.go(2100)
 
 
@@ -448,18 +422,19 @@ def check_balance():
         w.xp = xp
         assert (w.level, w.max_health) == (level, top), (xp, w.level, w.max_health)
     assert w.xp_progress()[1] == 0                      # 최대 레벨
-    w = World(0)                                        # 여섯 다리 괴물: 체력 10, 피해 7
+    w = World(0)                                        # 거미: 체력 10, 피해 7
     crawler = w.enemies[0]
     assert (crawler.health, w.enemy_damage(crawler)) == (10, 7)
     w.player.x, w.player.facing, crawler.actor.x = 500, 1, 560
     w.weapon_index, w.attack_kind = 2, 'slash'          # 한손검 베기 1레벨: 4 + 0 + 1 = 5
     w._apply_attack()
     assert crawler.health == 5, crawler.health
-    late = World(9)                                     # 후반 강화 ×1.6
-    watcher = next(e for e in late.enemies if e.spawn.kind == 'watcher')
-    assert (watcher.health, late.enemy_damage(watcher)) == (19, 13)
-    beast = next(e for e in late.enemies if e.spawn.kind == 'beast')
-    assert late.enemy_damage(beast) == 10                # 25의 40%
+    late = World(8)                                     # 후반 강화 ×1.6
+    thief = next(e for e in late.enemies if e.spawn.kind == 'time_thief')
+    assert (thief.health, late.enemy_damage(thief)) == (32, 11)
+    early = World(1)
+    beast = next(e for e in early.enemies if e.spawn.kind == 'beast')
+    assert early.enemy_damage(beast) == 10               # 25의 40%
     late.hurt(99, '테스트')
     assert (late.health, late.result) == (0, 'defeated')
 
@@ -477,9 +452,17 @@ def check_boss_warp():
         assert w.result == 'playing' and w.health == w.max_health, stage.title
 
 
+def check_late_stage_monsters():
+    allowed = {'time_thief', 'cursed_lantern', 'broken_jester'}
+    for stage in STAGES[6:9]:
+        kinds = {spawn.kind for spawn in stage.enemies} - BOSS_KINDS
+        assert kinds and kinds <= allowed, (stage.title, kinds)
+
+
 def main():
     check_balance()
     check_boss_warp()
+    check_late_stage_monsters()
     print('OK   밸런스 표')
     failed = False
     for index, stage in enumerate(STAGES):

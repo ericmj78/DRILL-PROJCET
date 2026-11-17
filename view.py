@@ -11,6 +11,7 @@ from pico2d import pico2d as canvas
 
 from animation import AttackCycle, WalkCycle, draw_region
 import boss_skills
+import late_monster_motion
 from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
 from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
@@ -91,9 +92,11 @@ def text_width(font, text):
 
 
 MONSTER_NAMES = {
-    'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '여섯 다리 괴물',
+    'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '거미',
     'jailer_boss': '쇠사슬 간수', 'magic_book': '마법책', 'potion_slime': '물약 슬라임',
     'magic_armor': '마법 갑옷', 'magic_armor_guard': '갑옷 경비병', 'witch': '마녀', 'grand_witch': '대마녀',
+    'echo_knight': '뒤틀린 잔향의 기사', 'time_thief': '시간 도둑',
+    'cursed_lantern': '저주받은 등불', 'broken_jester': '부서진 광대 인형',
 }
 
 
@@ -131,6 +134,7 @@ class View:
         self.boss_bars = {
             'jailer_boss': load_asset('ui_concepts/boss_bar_jailer_named.png'),
             'grand_witch': load_asset('ui_concepts/boss_bar_witch_named.png'),
+            'echo_knight': load_asset('ui_concepts/boss_health_bar_concept.png'),
         }
         self.title_art = load_asset('title_art.png')
         self.stage_art = {}
@@ -139,6 +143,8 @@ class View:
             self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
         self.wizard_art = load_asset('wizard_castle/castle-dark.png')
         self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
+        self.late_three_floor_art = load_asset('map_sections/echo-knight-approach-three-floors-concept.png')
+        self.echo_boss_arena = load_asset('map_sections/echo-knight-arena-concept.png')
         self.prison_boss_arena = load_asset('map_sections/stage-03-boss-arena.png')
         self.witch_boss_arena = load_asset('map_sections/stage-07-witch-boss-arena.png')
         self.wizard_book = load_asset('wizard_castle/book.png')
@@ -158,6 +164,11 @@ class View:
         self.player = load_asset('player.png')
         self.player_jump = load_asset('player_jump_sheet.png')
         self.jailer_chain_slam = load_asset('monster_concepts/prison-jailer-long-chain-slam-concept.png')
+        self.jester_walk = load_asset('monster_concepts/broken-jester-walk-16.png')
+        self.knight_sheets = {
+            name: load_asset(f'monster_concepts/echo-knight-{name}-sheet.png')
+            for name in ('walk', 'attack', 'charge', 'orb', 'bolts')
+        }
         self.echo = load_asset('echo.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
@@ -166,6 +177,13 @@ class View:
             load_asset(actors['player']['sheet']), actors['player']['frames'],
             actors['player']['draw_height'], actors['player']['stride_per_frame'],
         )
+        # 걸음에 맞춰 검이 흔들리는 시트. tools/make_sword_walk.py로 integrated 시트에서 만든다.
+        sword_walk = load_asset('player_sword_walk_swing.png')
+        cell_w, cell_h = sword_walk.w // 4, sword_walk.h // 2
+        sword_frames = [(col * cell_w, row * cell_h, cell_w, cell_h)
+                        for row in range(2) for col in range(4)]
+        self.player_sword_walk = WalkCycle(sword_walk, sword_frames, 90, 19.0)
+        self.player_sword_idle = load_asset('player_sword_idle_integrated.png')
         self.player_attack = AttackCycle(
             load_asset('player_attack_sheet.png'),
             [
@@ -190,6 +208,12 @@ class View:
             load_asset(watcher['sheet']), watcher['frames'],
             watcher['draw_height'], watcher['stride_per_frame'],
         )
+        spider = load_asset('monster_spider_walk_sheet.png')
+        cell_w, cell_h = spider.w // 4, spider.h // 2
+        spider_frames = [(column * cell_w, row * cell_h + round(cell_h * 0.20),
+                          cell_w, round(cell_h * 0.65))
+                         for row in range(2) for column in range(4)]
+        self.enemy_walk['crawler'] = WalkCycle(spider, spider_frames, 70, 9)
         for name, asset in (
             ('jailer_boss', 'prison-jailer-boss'), ('magic_armor', 'magic-armor'),
             ('magic_armor_guard', 'magic-armor'),
@@ -230,11 +254,13 @@ class View:
         if world is not self.current_world:
             self.current_world = world
             self.stage_started_at = perf_counter()
+            self.held_sword_angle = 122.0
+            self.held_sword_updated_at = perf_counter()
             self.camera_y = 0.0
             self.camera_updated_at = perf_counter()
         focus = world.recording.preview if world.recording else world.player
         self.camera_x = min(WIDTH, max(0, focus.x - WIDTH * 0.60))
-        if world.index in (0, 1, 3, 4, 5):
+        if world.index in (0, 1, 3, 4):
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
@@ -258,11 +284,35 @@ class View:
                     draw_region(corridor, (0, source_top, corridor.w, source_height),
                                 -self.camera_x, bottom, WIDTH * 2, 400)
                 self._draw_wizard_tower_effects(world.time)
-        elif world.index in (2, 6):
+        elif world.index == 8:
+            # 세 층을 하나의 이미지로 그려 층 사이 배경이 끊기지 않는다.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
-            lift_offset = world.lift_progress if world.index == 6 and world.lift_riding and focus is world.player else 0
+            image = self.late_three_floor_art
+            scale_y = 400 / 231
+            levels = (0, (690 - 455) * scale_y, (690 - 228) * scale_y,
+                      (690 - 228) * scale_y + 400)
+            floor = focus.floor
+            offset = focus.elevator_offset
+            target = levels[floor]
+            if offset > 0 and floor + 1 < len(levels):
+                target += offset * (levels[floor + 1] - levels[floor])
+            elif offset < 0 and floor > 0:
+                target += offset * (levels[floor] - levels[floor - 1])
+            self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            self.floor_y = tuple(160 + level - self.camera_y for level in levels)
+            bottom = self.floor_y[0] - (image.h - 690) * scale_y
+            draw_region(image, (0, 0, image.w, image.h), -self.camera_x,
+                        bottom, WIDTH * 2, image.h * scale_y)
+            arena = self.echo_boss_arena
+            draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
+                        self.floor_y[3] - 95, WIDTH * 2, 560)
+        elif world.index in (2, 5):
+            now = perf_counter()
+            elapsed = min(0.1, max(0, now - self.camera_updated_at))
+            self.camera_updated_at = now
+            lift_offset = world.lift_progress if world.index == 5 and world.lift_riding and focus is world.player else 0
             target = 400 * (focus.floor + focus.elevator_offset + lift_offset)
             self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y for floor in range(5))
@@ -285,7 +335,7 @@ class View:
                 arena = self.witch_boss_arena
             draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
                         self.floor_y[4] - 95, WIDTH * 2, 560)
-            if world.index == 6:
+            if world.index == 5:
                 self._draw_wizard_tower_effects(world.time)
         elif world.index == 1:
             # Stack the same prison corridor for each playable floor.
@@ -299,7 +349,7 @@ class View:
                             -self.camera_x, bottom, WIDTH * 2, height)
                 floor_y.append(bottom + round((image.h - 773) * height / image.h))
             self.floor_y = tuple(floor_y)
-        elif 3 <= world.index <= 6:
+        elif 3 <= world.index <= 5:
             single_floor = world.stage.floors == 1
             source_top = 330 if single_floor else 0
             source_height = self.wizard_art.h - source_top
@@ -309,10 +359,17 @@ class View:
             draw_region(self.wizard_art, (0, source_top, self.wizard_art.w, source_height),
                         -self.camera_x, 105, WIDTH * 2, 520)
             self._draw_wizard_effects(world.time, single_floor)
+        elif world.index == 6:
+            image = self.late_three_floor_art
+            source_height = 480
+            self.floor_y = tuple(105 + round((source_height - row) * 520 / source_height)
+                                 for row in (455, 228))
+            draw_region(image, (0, 0, image.w, source_height),
+                        -self.camera_x, 105, WIDTH * 2, 520)
         elif world.index == 7:
-            image = self.late_two_floor_art
+            image = self.late_three_floor_art
             self.floor_y = tuple(105 + round((image.h - row) * 520 / image.h)
-                                 for row in (635, 333))
+                                 for row in (690, 455, 228))
             draw_region(image, (0, 0, image.w, image.h),
                         -self.camera_x, 105, WIDTH * 2, 520)
         else:
@@ -385,7 +442,7 @@ class View:
     def _draw_wizard_tower_effects(self, time):
         sx = WIDTH * 2 / self.wizard_art.w
         scale_y = 400 / (self.wizard_art.h - 330)
-        for floor in range(4):
+        for floor in range(min(4, len(self.floor_y))):
             y = self.floor_y[floor] + (675 - 570) * scale_y
             for x0, x1 in ((715, 880), (950, 1110), (1180, 1340), (1405, 1555), (1610, 1765)):
                 x = x0 * sx - self.camera_x
@@ -393,6 +450,8 @@ class View:
                 self._wizard_fx_frame('rain', int(time * 4), x, y, width, height, 115)
                 if 9.0 <= time % 18 < 9.5:
                     self._wizard_fx_frame('storm', 12 + int((time % 18 - 9.0) * 4), x, y, width, height, 110)
+        if len(self.floor_y) < 5:
+            return
         # The arena image is a separate, full-height room; keep rain on its windows.
         arena = self.witch_boss_arena
         arena_y = self.floor_y[4] - 95
@@ -443,11 +502,11 @@ class View:
                 self._draw_puzzle_prop('hazard', x, y - 4, 45, 22)
                 self.small.draw(x - 15, y + 22, '함정', RED)
 
-        if stage.guard is not None and world.index != 2:
+        if (stage.guard is not None and world.index != 2
+                and any(enemy.spawn.point == stage.guard for enemy in world.enemies)):
             x, y = stage.guard.x - self.camera_x, self.floor_y[stage.guard.floor]
             color = CYAN if world.guard_open_time > 0 else RED
-            self._draw_puzzle_prop('guard', x, y + 32, 82, 100, world.guard_open_time > 0)
-            self.small.draw(x - 40, y + 145, '지나가세요!' if world.guard_open_time > 0 else '수호자 방어', color)
+            self.small.draw(x - 40, y + 180, '지나가세요!' if world.guard_open_time > 0 else '경비 구간', color)
 
         if stage.watch_gate is not None:
             gate = stage.watch_gate
@@ -591,7 +650,19 @@ class View:
             skill_phase = boss_skills.phase(enemy)
             if skill_phase is not None:
                 pose = skill_pose(enemy.spawn.kind, *skill_phase)
-            if enemy.spawn.kind == 'jailer_boss' and enemy.skill == 'chain' and skill_phase is not None:
+            if enemy.spawn.kind == 'echo_knight':
+                self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
+                if skill_phase is None and pose is not None:
+                    draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
+                                       enemy.windup, enemy.recovery)
+            elif enemy.spawn.kind in late_monster_motion.KINDS:
+                image = self.jester_walk if enemy.spawn.kind == 'broken_jester' else self.enemies[enemy.spawn.kind]
+                late_monster_motion.draw(image, screen_enemy.actor, y, kind.size, world.time,
+                                         enemy.spawn.kind, pose, tint)
+                if pose is not None:
+                    draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
+                                       enemy.windup, enemy.recovery)
+            elif enemy.spawn.kind == 'jailer_boss' and enemy.skill == 'chain' and skill_phase is not None:
                 self._draw_jailer_chain(screen_enemy.actor, y, skill_phase, tint, kind.size)
             elif pose is not None:
                 # 공격 중에는 monster_attack.py의 자세 스크립트대로 그린다.
@@ -627,7 +698,8 @@ class View:
                 self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
             # 머리 위에 이름과 체력바. 벨 수 없는 적은 이름만 흐리게 보인다.
             boss = enemy.spawn.kind in BOSS_KINDS
-            bar_y = y + (kind.size + 8 if boss else 73 if feet == 0.30 else 103)
+            bar_y = y + (kind.size + 25 if enemy.spawn.kind in late_monster_motion.KINDS
+                         else kind.size + 8 if boss else 73 if feet == 0.30 else 103)
             half = 45 if boss else 24
             if enemy.health is not None:
                 box(x - half - 1, bar_y - 1, x + half + 1, bar_y + 5, INK)
@@ -688,13 +760,39 @@ class View:
             progress = 1 - world.attack_flash / world.attack_duration
             body = copy(player)
             body.x += player.facing * player_attack.weapon_pose(world.attack_kind, progress)[3]
-            self.player_attack.draw(body, floor, progress, opacity=player_alpha)
+            blend = player_attack.body_frames(progress) if world.weapon_index == 2 else None
+            height = 91 if world.weapon_index == 2 else None
+            self.player_attack.draw(body, floor, progress, opacity=player_alpha, blend_frames=blend, height=height)
             if world.weapon_index:
                 for past, strength in player_attack.trail(progress):
                     self._draw_weapon(player, world.weapon_index, floor, past, round(player_alpha * strength), world.attack_kind)
                 self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha, world.attack_kind)
         else:
-            self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
+            if world.weapon_index == 2 and player.jump_time <= 0:
+                if player.moving:
+                    self.player_sword_walk.draw(player, floor, player_alpha)
+                else:
+                    image = self.player_sword_idle
+                    region = (54, 15, 866, 1339)
+                    height = 86
+                    width = height * region[2] / region[3]
+                    canvas.SDL_SetTextureAlphaMod(image.texture, player_alpha)
+                    draw_region(image, region, player.x - width / 2, floor,
+                                width, height, player.facing < 0)
+                    canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+            else:
+                if world.weapon_index == 2:
+                    hand_x, hand_y, target_angle, lunge = player_attack.held_sword_pose(world.player)
+                    now = perf_counter()
+                    elapsed = min(0.1, max(0.0, now - self.held_sword_updated_at))
+                    self.held_sword_updated_at = now
+                    if world.player.moving:
+                        self.held_sword_angle = target_angle
+                    else:
+                        self.held_sword_angle += (target_angle - self.held_sword_angle) * min(1.0, elapsed * 12)
+                    self._draw_weapon(player, 2, floor, 0, player_alpha, 'slash',
+                                      pose=(hand_x, hand_y, self.held_sword_angle, lunge))
+                self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
         player_attack.draw_attack_effect(
             self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
             WEAPONS[world.weapon_index].reach, player.x, floor, player.facing)
@@ -714,6 +812,37 @@ class View:
         box(x - 19, y - 7, x + 19, y + 13, INK)
         self.small.draw(x - 15, y + 3, marker, color)
 
+    def _draw_echo_knight(self, enemy, floor_y, size, skill_phase, tint):
+        actor = enemy.actor
+        if skill_phase is not None:
+            name = enemy.skill
+            phase, progress = skill_phase
+            if phase == 'telegraph':
+                frame = min(2, int(progress * 3))
+            elif phase == 'active':
+                frame = 3 + min(2, int(progress * 3))
+            else:
+                frame = 6 + min(1, int(progress * 2))
+        elif enemy.windup > 0:
+            name = 'attack'
+            frame = min(3, max(0, int((1 - enemy.windup / 0.31) * 4)))
+        elif enemy.recovery > 0:
+            name = 'attack'
+            frame = 4 + min(3, max(0, int((1 - enemy.recovery / 0.65) * 4)))
+        else:
+            name = 'walk'
+            frame = int(actor.walk_distance / 9) % 16 if actor.moving else 0
+
+        image = self.knight_sheets[name]
+        columns, rows = (4, 4) if name == 'walk' else (4, 2)
+        width, height = image.w // columns, image.h // rows
+        region = ((frame % columns) * width, (frame // columns) * height, width, height)
+        draw_width = size * width / height
+        canvas.SDL_SetTextureColorMod(image.texture, *tint)
+        draw_region(image, region, actor.x - draw_width / 2, floor_y, draw_width, size,
+                    flip=actor.facing != -1)
+        canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+
     def _screen_actor(self, actor):
         screen_actor = copy(actor)
         screen_actor.x -= self.camera_x
@@ -726,10 +855,13 @@ class View:
         end = self.floor_y[actor.elevator_target]
         return start + (end - start) * abs(actor.elevator_offset)
 
-    def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind):
+    def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind, pose=None):
         region, height, grip = WEAPON_SPRITES[index]
         width = round(height * region[2] / region[3])
-        hand_x, hand_y, angle, lunge = player_attack.weapon_pose(attack_kind, progress)
+        if pose is None:
+            pose = (player_attack.sword_pose(attack_kind, progress) if index == 2
+                    else player_attack.weapon_pose(attack_kind, progress))
+        hand_x, hand_y, angle, lunge = pose
         grip_y = round(height * grip)
         center = canvas.SDL_Point(width // 2, grip_y)
         left = actor.x + actor.facing * (hand_x + lunge) - center.x
@@ -850,6 +982,10 @@ class View:
         height = width * image.h / image.w
         scale = width / image.w
         draw_region(image, (0, 0, image.w, image.h), left, bottom, width, height)
+        if boss.spawn.kind == 'echo_knight':
+            name = MONSTER_NAMES[boss.spawn.kind]
+            self.small.draw(left + width / 2 - text_width(self.small, name) / 2,
+                            bottom + height * 0.67, name, GOLD)
 
         # Darken the original bar texture to make an empty track, then reveal the
         # same red pixels in proportion to the current health.
