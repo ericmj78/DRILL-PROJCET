@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from stages import ACTOR_RADIUS, GATE_HALF_WIDTH, LEFT
+from stages import ACTOR_RADIUS, GATE_HALF_WIDTH, LEFT, RIGHT
 from world import Actor, Motion, World
 
 
@@ -9,44 +10,184 @@ class SpiderEchoTests(unittest.TestCase):
         self.world = World(0)
         self.world.enemies.clear()
 
-    def test_spider_climbs_boundary_but_normal_echo_cannot(self):
-        spider = Actor(LEFT, 0)
-        normal = Actor(LEFT, 0)
-        self.world._move(spider, Motion(stairs=1), 'crawler')
-        self.world._move(normal, Motion(stairs=1))
-        self.assertEqual(spider.elevator_target, 1)
-        self.assertIsNone(normal.elevator_target)
-        for _ in range(60):
-            self.world._move(spider, Motion(), 'crawler')
-        self.assertEqual(spider.floor, 1)
-        self.assertIsNone(spider.elevator_target)
+    def test_statue_within_range_can_cross_a_and_press_b_on_replay(self):
+        w = self.world
+        w.player.x = 780
+        w.start_recording('crawler')
+        w.player.x = 100
+        moves = ([Motion(stairs=1, web_aiming=True), Motion(web=True)]
+                 + [Motion(horizontal=-1)] * 15
+                 + [Motion(horizontal=-1, jump=True)]
+                 + [Motion(horizontal=-1)] * 100 + [Motion()] * 30)
+        for move in moves:
+            w.step(move)
+        self.assertLess(abs(w.recording.preview.x - w.stage.gates[1].plate.x), 27)
+        self.assertFalse(w.doors[0].open)
+        w.toggle_recording()
+        b_pressed = False
+        for _ in moves[:-1]:
+            w.step()
+            b_pressed |= w.doors[1].pressed
+        self.assertTrue(b_pressed)
 
-    def test_spider_can_climb_wall_background_but_not_above_top_floor(self):
+    def test_web_range_is_120_for_real_obstacles(self):
+        gate_x = self.world.stage.gates[0].door.x
+        near, far = Actor(gate_x - 60, 0), Actor(gate_x - 200, 0)
+        target = self.world.spider_web_target(near, 1)
+        self.assertIsNotNone(target)
+        self.assertEqual(target[0], gate_x)
+        self.assertIsNone(self.world.spider_web_target(far, 1))
+        self.assertIsNone(self.world.spider_web_target(Actor(1000, 0), 0))
+
+    @patch('world.SPIDER_AIM_REACH', 480)
+    def test_aim_shows_real_surface_and_fire_replaces_old_rope(self):
+        w = self.world
+        actor = Actor(1000, 0)
+        w._move(actor, Motion(stairs=1, web_aiming=True), 'crawler')
+        target = w.spider_web_target(actor, actor.web_aim_x)
+        self.assertEqual(target, (1000, 365))
+        w._move(actor, Motion(web=True), 'crawler')
+        self.assertEqual(actor.web_anchor_x, 1000)
+        self.assertGreater(actor.web_time, 0)
+        w._move(actor, Motion(horizontal=1, web_aiming=True), 'crawler')
+        target = w.spider_web_target(actor, actor.web_aim_x)
+        self.assertIsNotNone(target)
+        w._move(actor, Motion(web=True), 'crawler')
+        self.assertAlmostEqual(actor.web_anchor_x, target[0])
+        self.assertNotEqual(actor.web_anchor_x, 1000)
+        self.assertFalse(actor.web_flying)
+
+    def test_no_surface_in_range_does_not_attach(self):
+        w = self.world
+        actor = Actor(1100, w.stage.floors - 1)
+        w._move(actor, Motion(stairs=1, web_aiming=True), 'crawler')
+        self.assertIsNone(w.spider_web_target(actor, actor.web_aim_x))
+        w._move(actor, Motion(web=True), 'crawler')
+        self.assertEqual(actor.web_time, 0)
+
+    @patch('world.SPIDER_AIM_REACH', 480)
+    def test_f_reconnects_while_airborne_and_replays(self):
+        w = self.world
+        w.player.x = 100
+        w.start_recording('crawler')
+        states = []
+        for frame in range(80):
+            w.step(Motion(horizontal=1, jump=frame == 51, web=frame in (1, 54),
+                          web_aiming=frame in (0, 52, 53)))
+            actor = w.recording.preview
+            states.append((actor.x, actor.jump_height, actor.web_flying, actor.web_anchor_x))
+        self.assertTrue(states[53][2])
+        self.assertFalse(states[54][2])
+        self.assertNotEqual(states[53][3], states[54][3])
+        self.assertAlmostEqual(states[53][0], states[54][0])
+        self.assertAlmostEqual(states[53][1], states[54][1])
+        w.toggle_recording()
+        for expected in states[:-1]:
+            w.step()
+            actor = w.echo.actor
+            self.assertAlmostEqual(actor.x, expected[0])
+            self.assertAlmostEqual(actor.jump_height, expected[1])
+            self.assertEqual(actor.web_flying, expected[2])
+            self.assertAlmostEqual(actor.web_anchor_x, expected[3])
+
+    def test_spider_climbs_map_boundaries_but_normal_echo_cannot(self):
+        for x in (LEFT, RIGHT):
+            with self.subTest(x=x):
+                spider = Actor(x, 0)
+                normal = Actor(x, 0)
+                self.world._move(spider, Motion(stairs=1), 'crawler')
+                self.world._move(normal, Motion(stairs=1))
+                self.assertEqual(spider.elevator_target, 1)
+                self.assertIsNone(normal.elevator_target)
+                for _ in range(60):
+                    self.world._move(spider, Motion(), 'crawler')
+                self.assertEqual(spider.floor, 1)
+
+    def test_spider_cannot_climb_wall_background(self):
         spider = Actor(1100, 0)
         self.world._move(spider, Motion(stairs=1), 'crawler')
-        self.assertEqual(spider.elevator_target, 1)
+        self.assertIsNone(spider.elevator_target)
         spider.elevator_target = None
         spider.x, spider.floor = LEFT, self.world.stage.floors - 1
         self.world._move(spider, Motion(stairs=1), 'crawler')
         self.assertIsNone(spider.elevator_target)
 
-    def test_web_movement_is_recorded_and_replayed(self):
+    def swing(self, world, spider, frames, horizontal=0, stairs=0):
+        for frame in range(frames):
+            # 반동은 흔들리는 방향으로 줄 때 커진다.
+            push = horizontal if horizontal != 'pump' else (1 if spider.web_speed >= 0 else -1)
+            world._move(spider, Motion(push, stairs), 'crawler')
+
+    def land(self, world, spider):
+        world._move(spider, Motion(jump=True), 'crawler')
+        for _ in range(300):
+            if spider.web_time == 0:
+                return
+            world._move(spider, Motion(), 'crawler')
+        self.fail('거미가 착지하지 않았습니다')
+
+    @patch('world.SPIDER_AIM_REACH', 480)
+    def test_pumping_swings_further_than_hanging(self):
+        distances = {}
+        for name, push in (('hang', 0), ('pump', 'pump')):
+            w = World(1)
+            w.enemies.clear()
+            spider = Actor(1300, 0)
+            w._move(spider, Motion(web=True), 'crawler')
+            self.assertGreater(spider.web_time, 0)
+            self.swing(w, spider, 150, push)
+            best = 0.0
+            # 오른쪽으로 가장 빠르게 흔들릴 때 놓는다.
+            for _ in range(120):
+                w._move(spider, Motion(push if push != 'pump' else (1 if spider.web_speed >= 0 else -1)), 'crawler')
+                if spider.web_speed > 0 and spider.web_angle > 0.45:   # 오른쪽으로 올라가는 중
+                    break
+            self.land(w, spider)
+            distances[name] = spider.x - 1300
+        self.assertGreater(distances['pump'], distances['hang'] + 80)
+
+    def test_web_swing_is_recorded_and_replayed(self):
         w = self.world
-        w.player.x = 100
+        w.player.x = 1000
         w.start_recording('crawler')
         recorded = []
-        for frame in range(60):
-            w.step(Motion(web=frame == 0))
+        for frame in range(150):
+            push = 1 if (frame // 25) % 2 == 0 else -1
+            w.step(Motion(push, 1 if 60 < frame < 80 else 0, jump=frame == 130,
+                          web=frame == 1, web_aiming=frame == 0))
             recorded.append((w.recording.preview.x, w.recording.preview.jump_height))
-        self.assertGreater(recorded[25][1], 80)
-        self.assertGreater(recorded[-1][0], 300)
+        self.assertGreater(max(h for _, h in recorded), 30)
         w.toggle_recording()
         for x, height in recorded[:-1]:
             w.step()
             self.assertAlmostEqual(w.echo.actor.x, x)
             self.assertAlmostEqual(w.echo.actor.jump_height, height)
 
-    def test_holding_up_climbs_and_replays_from_dungeon_wall(self):
+    @patch('world.SPIDER_AIM_REACH', 480)
+    def test_reeling_in_lifts_the_spider_over_a_wall(self):
+        w = World(1)
+        w.enemies.clear()
+        wall = w.stage.walls[0]
+        spider = Actor(wall.x - 60, wall.floor)
+        w._move(spider, Motion(stairs=1, web_aiming=True), 'crawler')
+        w._move(spider, Motion(web=True), 'crawler')
+        self.swing(w, spider, 40)
+        self.assertLess(spider.x, wall.x)          # 낮을 때는 벽에 막힌다
+        for _ in range(120):                       # 벽보다 높아질 때까지만 줄을 감는다
+            w._move(spider, Motion(stairs=1), 'crawler')
+            if spider.jump_height > 125:
+                break
+        self.assertGreater(spider.jump_height, 125)
+        for _ in range(120):
+            w._move(spider, Motion(horizontal=1), 'crawler')
+            if spider.web_speed > 0 and spider.x > wall.x:
+                break
+        self.assertGreater(spider.x, wall.x)
+        self.land(w, spider)
+        self.assertGreater(spider.x, wall.x)
+        self.assertEqual(spider.floor, wall.floor)
+
+    def test_holding_up_at_background_stays_on_same_floor_in_replay(self):
         w = self.world
         w.player.x = 500
         w.start_recording('crawler')
@@ -55,7 +196,8 @@ class SpiderEchoTests(unittest.TestCase):
             w.step(Motion(stairs=1))
             actor = w.recording.preview
             recorded.append((actor.floor, actor.elevator_target, actor.elevator_offset))
-        self.assertEqual(w.recording.preview.floor, 2)
+        self.assertEqual(w.recording.preview.floor, 0)
+        self.assertIsNone(w.recording.preview.elevator_target)
         w.toggle_recording()
         for floor, target, offset in recorded[:-1]:
             w.step()
@@ -92,11 +234,22 @@ class SpiderEchoTests(unittest.TestCase):
                 self.assertLess((w.echo.actor.x - door_x) * side, 0)
                 self.assertFalse(w.doors[0].pressed)
 
-    def test_web_does_not_cross_a_closed_gate(self):
+    def test_climbs_actual_wall_obstacle(self):
+        w = World(1)
+        wall = w.stage.walls[0]
+        spider = Actor(wall.x - GATE_HALF_WIDTH - ACTOR_RADIUS, wall.floor)
+        w._move(spider, Motion(stairs=1), 'crawler')
+        self.assertGreater(spider.door_climb_time, 0)
+        for _ in range(80):
+            w._move(spider, Motion(), 'crawler')
+        self.assertGreater(spider.x, wall.x)
+    def test_low_swing_does_not_cross_a_closed_gate(self):
         w = self.world
         spider = Actor(650, 0)
-        for frame in range(70):
-            w._move(spider, Motion(web=frame == 0), 'crawler')
+        w._move(spider, Motion(web=True), 'crawler')
+        self.swing(w, spider, 120, 'pump')
+        self.assertLess(spider.x, w.stage.gates[0].door.x)
+        self.land(w, spider)
         self.assertLess(spider.x, w.stage.gates[0].door.x)
         self.assertEqual(spider.web_time, 0)
 

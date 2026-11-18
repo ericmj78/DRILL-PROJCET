@@ -19,7 +19,7 @@ from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
 from stages import PLATE_RANGE, Point
-from world import JUMP_DURATION, LIGHT_BELOW, WATCH_RANGE
+from world import JUMP_DURATION, LIGHT_BELOW, SPIDER_AIM_REACH, WATCH_RANGE
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -137,6 +137,9 @@ class View:
         self.background = load_asset('dungeon.png')
         self.hud_concept = load_asset('ui_concepts/echo_hud_concept.png')
         self.echo_selection_panel = load_asset('ui_concepts/echo_selection_panel.png')
+        self.spider_skill_icons = load_asset('ui_concepts/spider_skill_icons.png')
+        self.beast_jump_passive = load_asset('ui_concepts/beast_jump_passive.png')
+        self.beast_super_jump = load_asset('monster_echo_concepts/hornbeast_echo_super_jump.png')
         self.boss_bars = {
             'jailer_boss': load_asset('ui_concepts/boss_bar_jailer_named.png'),
             'grand_witch': load_asset('ui_concepts/boss_bar_witch_named.png'),
@@ -167,6 +170,7 @@ class View:
         self.plate_art = load_asset('dungeon_props/pressure-plate.png')
         self.torch_art = load_asset('dungeon_props/wall-torch-32px-strip8.png')
         self.gate_art = load_asset('dungeon_props/portcullis.png')
+        self.web_beam_art = load_asset('dungeon_props/spider_web_beam.png')
         self.exit_art = load_asset('dungeon_props/exit-portal.png')
         self.ladder_art = load_asset('dungeon_props/ladder.png')
         self.lever_art = load_asset('dungeon_props/lever.png')
@@ -771,6 +775,12 @@ class View:
             for offset in range(12, 120, 15):
                 line(x - GATE_HALF_WIDTH, y + offset, x + GATE_HALF_WIDTH, y + offset, LINE)
 
+        for beam in stage.web_beams:
+            image = self.web_beam_art
+            draw_region(image, (0, 0, image.w, image.h), beam.left - self.camera_x,
+                        self.floor_y[beam.floor] + beam.underside,
+                        beam.right - beam.left, beam.height)
+
         for gate, state in zip(stage.gates, world.doors):
             px, py = gate.plate.x - self.camera_x, self.floor_y[gate.plate.floor]
             gx, gy = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
@@ -989,18 +999,46 @@ class View:
         self.small.draw(x - 15, y + 3, marker, color)
 
     def _draw_selected_echo(self, actor, monster_kind, opacity=228):
+        world_actor = actor
         actor = self._screen_actor(actor)
         if monster_kind is None or monster_kind not in self.monster_echo_walk:
             self._avatar(self.echo, self.echo_walk, actor, opacity=255)
             return
         floor = self._actor_floor_y(actor) + actor.jump_height
-        if monster_kind == 'crawler' and actor.web_time > 0:
+        if monster_kind == 'beast' and (actor.beast_charge_active or actor.beast_super_jump):
+            image = self.beast_super_jump
+            width, height = image.w // 4, image.h // 2
+            frame = (min(2, int(actor.beast_charge * 3)) if actor.beast_charge_active
+                     else 3 + min(4, int(actor.jump_time / actor.jump_duration * 5)))
+            canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
+            draw_region(image, ((frame % 4) * width, (frame // 4) * height, width, height),
+                        actor.x - 57.5, floor, 115, 115, actor.facing != -1)
+            canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+            return
+        if monster_kind == 'crawler' and actor.web_time > 0 and not actor.web_flying:
+            # 천장에 붙인 거미줄. 감으면 짧아지고 몸이 올라간다.
             anchor_x = actor.web_anchor_x - self.camera_x
-            anchor_y = self._actor_floor_y(actor) + 230
+            anchor_y = self._actor_floor_y(actor) + actor.web_anchor_height + 34
             line(anchor_x, anchor_y, actor.x, floor + 34, WHITE)
-            box(anchor_x - 3, anchor_y - 3, anchor_x + 3, anchor_y + 3, GOLD)
+            line(anchor_x + 1, anchor_y, actor.x + 1, floor + 34, MUTED)
+            box(anchor_x - 4, anchor_y - 2, anchor_x + 4, anchor_y + 4, WHITE)
+        if monster_kind == 'crawler' and actor.web_aiming:
+            target = self.current_world.spider_web_target(world_actor, actor.web_aim_x)
+            if target:
+                tx, ty, color = target[0] - self.camera_x, self._actor_floor_y(actor) + target[1], GOLD
+            else:
+                scale = SPIDER_AIM_REACH / (2 ** 0.5 if actor.web_aim_x else 1)
+                tx, ty, color = actor.x + actor.web_aim_x * scale, floor + 34 + scale, RED
+            for index in range(0, 12, 2):
+                a, b = index / 12, (index + 1) / 12
+                line(actor.x + (tx - actor.x) * a, floor + 34 + (ty - floor - 34) * a,
+                     actor.x + (tx - actor.x) * b, floor + 34 + (ty - floor - 34) * b, color)
+            box(tx - 4, ty - 4, tx + 4, ty + 4, color)
         faces = 1 if monster_kind == 'broken_jester' else -1
-        self.monster_echo_walk[monster_kind].draw(actor, floor, opacity=opacity, faces=faces)
+        walk = self.monster_echo_walk[monster_kind]
+        # 거미 시트의 발 아래 투명 여백만큼 내려 바닥에 발을 맞춘다.
+        draw_floor = floor - walk.draw_height * 0.21 if monster_kind == 'crawler' else floor
+        walk.draw(actor, draw_floor, opacity=opacity, faces=faces)
 
     def _draw_echo_knight(self, enemy, floor_y, size, skill_phase, tint):
         actor = enemy.actor
@@ -1163,6 +1201,28 @@ class View:
         line(28, 103, WIDTH - 28, 103, LINE)
         if world.message_time > 0:
             self.body.draw((WIDTH - text_width(self.body, world.message)) / 2, 52, world.message, GOLD)
+        if world.recording is not None and world.recording.monster_kind == 'crawler':
+            self._draw_spider_skills()
+        elif world.recording is not None and world.recording.monster_kind == 'beast':
+            self._draw_beast_passive()
+
+    def _draw_beast_passive(self):
+        image = self.beast_jump_passive
+        box(440, 110, 680, 178, (7, 14, 27, 220))
+        draw_region(image, (0, 0, image.w, image.h), 450, 117, 52, 52)
+        self.body.draw(510, 151, '패시브', GOLD)
+        self.small.draw(510, 128, 'Space 1초  슈퍼 점프', WHITE)
+
+    def _draw_spider_skills(self):
+        # 실제 거미 분신 조작 중에만 현재 사용할 수 있는 키를 표시한다.
+        image = self.spider_skill_icons
+        cell_width = image.w // 2
+        box(400, 110, 720, 178, (7, 14, 27, 220))
+        for index, (left, key, label) in enumerate(((410, 'F', '조준·발사'), (565, 'Space', '줄 놓기'))):
+            draw_region(image, (index * cell_width, 0, cell_width, image.h), left, 117, 52, 52)
+            self.body.draw(left + 55, 151, key, GOLD)
+            self.small.draw(left + 55, 128, label, WHITE)
+        self.small.draw(410, 100, 'F를 누른 채 방향키로 조준하고 떼면 발사합니다.', MUTED)
 
     def _draw_boss_bar(self, world):
         boss = next((enemy for enemy in world.enemies if enemy.spawn.kind in BOSS_KINDS
@@ -1416,7 +1476,7 @@ class View:
                 ('함께 돌파', '분신으로 발판을 누르고 적을 유인하거나 감지 장치를 작동하세요.'),
                 ('전투와 출구', 'A는 강한 근거리 베기, S는 약하지만 더 긴 찌르기입니다.'),
                 ('몬스터 분신', '일반 몬스터 분신은 최대 2종 보유하며 기본 분신은 항상 사용할 수 있습니다.'),
-                ('거미 분신', '던전 벽면에서 ↑↓를 누르면 벽을 타고, F로 거미줄 이동을 녹화합니다.'),
+                ('거미 분신', 'F를 누르고 방향을 정한 뒤 떼어 발사합니다. Space로 줄을 놓습니다.'),
                 ('알아두기', '다른 몬스터 고유 능력은 아직 없으며 보스는 분신으로 얻을 수 없습니다.'),
             )
             for row, (label, description) in enumerate(lines):
@@ -1449,7 +1509,7 @@ class View:
                 self.body.draw(x + 85, y + 16, MONSTER_NAMES.get(kind, '갑옷 경비병'), GOLD)
                 self.small.draw(x + 85, y - 14, description, WHITE)
             self.small.draw(100, 145, '일반 몬스터 분신: 외형이 바뀌며 기본 분신과 같은 기능을 사용합니다.', MUTED)
-            self.small.draw(100, 119, '거미 분신: ↑↓ 벽 타기 · F 거미줄 이동 / 보스 획득 불가', MUTED)
+            self.small.draw(100, 119, '거미 분신: F 누른 채 방향 조준, 떼면 발사 · Space 줄 놓기 / 보스 획득 불가', MUTED)
 
     def draw_echo_selector(self, world):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))

@@ -5,7 +5,7 @@ LEFT, RIGHT = 48, 2192
 FLOOR_Y = (156, 320, 484)
 STEP = 1 / 60
 MOVE_SPEED = 230
-MAX_RECORD_SECONDS = 9
+MAX_RECORD_SECONDS = 10
 # 본체 레벨 (BALANCE.md). 레벨 1~9에서 다음 레벨까지 필요한 경험치이며 최대 레벨은 10이다.
 LEVEL_UP_XP = (30, 45, 60, 80, 100, 120, 140, 160, 180)
 HAZARD_RATIO = 0.2      # 숨은 함정은 최대 체력의 20%를 깎는다.
@@ -45,6 +45,15 @@ class Gate:
     plate: Point
     door: Point
     lever: Point | None = None
+
+
+@dataclass(frozen=True)
+class WebBeam:
+    floor: int
+    left: int
+    right: int
+    underside: int
+    height: int = 70
 
 
 @dataclass(frozen=True)
@@ -172,6 +181,7 @@ class Stage:
     echo_seconds: float = MAX_RECORD_SECONDS  # 이 스테이지에서 분신 한 번에 녹화할 수 있는 시간
     elevators: tuple[Stair, ...] = ()
     enemy_scale: float = 1.0  # 몬스터 체력·피해 배율
+    web_beams: tuple[WebBeam, ...] = ()
 
 
 STAGES = (
@@ -184,11 +194,12 @@ STAGES = (
             Gate('A', Point(267, 0), Point(740, 0)),
             Gate('B', Point(430, 0), Point(1400, 0)),
         ),
+        web_beams=(WebBeam(0, 680, 800, 118),),
         enemies=(
             EnemySpawn('crawler', Point(1100, 0), (1000, 1200)),
             EnemySpawn('crawler', Point(1800, 0), (1700, 1900)),
         ),
-        echo_seconds=5.5,
+        echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '02  사냥꾼의 시야',
@@ -202,7 +213,7 @@ STAGES = (
         ),
         walls=(Point(900, 1),),
         watch_gate=WatchGate(Point(1300, 0), Point(1800, 1)),
-        echo_seconds=5,
+        echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '03  간수의 다섯 층',
@@ -225,7 +236,7 @@ STAGES = (
         ),
         walls=(Point(1100, 1),),
         guard=Point(1500, 2),
-        echo_seconds=8,
+        echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '04  반대편 발판',
@@ -241,7 +252,7 @@ STAGES = (
             EnemySpawn('witch', Point(2000, 0), (1940, 2060)),
         ),
         sequence=SequenceGate((Point(1460, 0), Point(1300, 0), Point(1620, 0)), Point(1850, 0)),
-        echo_seconds=5,
+        echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '05  아래층의 열쇠',
@@ -257,7 +268,7 @@ STAGES = (
             EnemySpawn('potion_slime', Point(350, 1), (290, 410)),
         ),
         isolation=IsolationRoom(Point(1500, 0), Point(1320, 1), Point(1000, 1), 1540),
-        echo_seconds=5,
+        echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '06  대마녀의 다섯 층',
@@ -280,7 +291,7 @@ STAGES = (
             EnemySpawn('grand_witch', Point(1120, 4), (1050, 1190)),
         ),
         lift=BalanceLift(Point(1450, 0), Point(1300, 0)),
-        echo_seconds=3.5,
+        echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '07  두 번째 잔향',
@@ -296,7 +307,7 @@ STAGES = (
             EnemySpawn('broken_jester', Point(950, 0), (850, 1150)),
         ),
         sync_gate=SyncGate(Point(800, 1), Point(800, 0), Point(500, 1)),
-        echo_seconds=4.5,
+        echo_seconds=MAX_RECORD_SECONDS,
         enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
@@ -314,7 +325,7 @@ STAGES = (
             EnemySpawn('cursed_lantern', Point(1150, 2), (1100, 1200)),
         ),
         hidden_hazards=(Point(1300, 2), Point(1520, 2), Point(1740, 2)),
-        echo_seconds=4.5,
+        echo_seconds=MAX_RECORD_SECONDS,
         enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
@@ -335,7 +346,7 @@ STAGES = (
         ),
         hidden_hazards=(Point(1700, 2), Point(1900, 2)),
         guard=Point(1500, 2),
-        echo_seconds=4,
+        echo_seconds=MAX_RECORD_SECONDS,
         enemy_scale=LATE_STAGE_SCALE,
     ),
 )

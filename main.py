@@ -61,6 +61,9 @@ def main():
                 if event.type == SDL_QUIT:
                     return
                 if event.type == SDL_KEYUP:
+                    if (event.key == SDLK_f and SDLK_f in pressed and screen == 'play'
+                            and world.recording is not None and world.recording.monster_kind == 'crawler'):
+                        pending_web = True
                     pressed.discard(event.key)
                 if screen == 'intro' and stage_entry is None:
                     if event.type in (SDL_MOUSEMOTION, SDL_MOUSEBUTTONDOWN):
@@ -218,8 +221,6 @@ def main():
                     world.toggle_lever()
                 elif key == SDLK_f and key not in pressed:
                     pressed.add(key)
-                    if world.recording is not None and world.recording.monster_kind == 'crawler':
-                        pending_web = True
                 elif SDLK_0 <= key <= SDLK_4:
                     world.select_weapon(key - SDLK_0)
                 elif key in (SDLK_a, SDLK_s) and world.recording is None:
@@ -236,7 +237,8 @@ def main():
                         stairs = pending_stairs
                         if world.recording is not None and world.recording.monster_kind == 'crawler':
                             stairs = int(SDLK_UP in pressed) - int(SDLK_DOWN in pressed)
-                        world.step(Motion(horizontal, stairs, pending_jump, pending_web), pending_attack)
+                        world.step(Motion(horizontal, stairs, pending_jump, pending_web,
+                                          SDLK_SPACE in pressed, SDLK_f in pressed), pending_attack)
                     next_world = advance_stage_section(world)
                     if next_world is not world:
                         world = next_world

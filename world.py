@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from math import pi, sin
+from math import asin, atan2, cos, hypot, pi, sin
 
 import boss_skills
 from stages import HAZARD_RATIO, LEVEL_UP_XP, attack_power, max_health
@@ -15,13 +15,24 @@ from stages import (
 
 JUMP_DURATION = 0.64
 JUMP_HEIGHT = 42
+BEAST_JUMP_DURATION = 1.0
+BEAST_JUMP_HEIGHT = 100
+BEAST_CHARGE_SECONDS = 1.0
 ELEVATOR_DURATION = 0.8
 ENEMY_CHASE_MARGIN = 400
 ECHO_DAMAGE_RATIO = 0.30
 ECHO_INVULNERABILITY = 0.92
-SPIDER_WEB_DURATION = 1.0
-SPIDER_WEB_DISTANCE = 220
-SPIDER_WEB_HEIGHT = 100
+# 거미줄 그네 (거미 분신 전용). F로 붙이고 ←→로 반동, ↑↓로 줄을 감고 풀고, F나 Space로 놓는다.
+SPIDER_WEB_TOP = 150       # 거미줄을 붙이는 천장 높이 (바닥 위)
+SPIDER_WEB_REACH = 90      # 바라보는 쪽으로 이만큼 앞에 붙인다
+SPIDER_GRAVITY = 1400      # px/s²
+SPIDER_PUMP = 3.2          # ←→로 주는 반동 (rad/s²)
+SPIDER_DAMPING = 0.15      # 초당 흔들림이 줄어드는 비율
+SPIDER_REEL = 170          # ↑↓로 줄을 감고 푸는 속도 (px/s)
+SPIDER_WEB_MIN, SPIDER_WEB_MAX = 22, 190
+SPIDER_AIM_REACH = 120
+SPIDER_MAX_ANGLE = 1.35    # 줄이 수직에서 벌어질 수 있는 최대 각 (rad)
+SPIDER_OVER_HEIGHT = 125   # 이 높이 이상이면 문과 벽 위로 넘어간다
 SPIDER_DOOR_CLIMB_DURATION = 1.2
 SPIDER_DOOR_CLIMB_HEIGHT = 145
 
@@ -34,12 +45,26 @@ class Actor:
     moving: bool = False
     walk_distance: float = 0
     jump_time: float = 0.0
+    jump_duration: float = JUMP_DURATION
+    jump_peak: float = JUMP_HEIGHT
+    beast_charge: float = 0.0
+    beast_charge_active: bool = False
+    beast_super_jump: bool = False
     elevator_target: int | None = None
     elevator_time: float = 0.0
-    web_time: float = 0.0
-    web_start_x: float = 0.0
+    web_time: float = 0.0         # 거미줄에 매달리거나 놓고 날아가는 동안 0보다 크다
     web_anchor_x: float = 0.0
-    web_direction: int = 1
+    web_anchor_height: float = SPIDER_WEB_TOP
+    web_anchor_beam: bool = False
+    web_length: float = 0.0
+    web_angle: float = 0.0        # 수직에서 벌어진 각. 양수면 붙인 점보다 오른쪽
+    web_speed: float = 0.0        # 각속도 (rad/s)
+    web_flying: bool = False      # 줄을 놓고 날아가는 중
+    web_vx: float = 0.0
+    web_vy: float = 0.0
+    web_height: float = 0.0
+    web_aiming: bool = False
+    web_aim_x: int = 1
     door_climb_time: float = 0.0
     door_climb_x: float = 0.0
     door_climb_start: float = 0.0
@@ -57,11 +82,11 @@ class Actor:
         if self.door_climb_time > 0:
             return SPIDER_DOOR_CLIMB_HEIGHT * sin(pi * min(1.0, self.door_climb_time / SPIDER_DOOR_CLIMB_DURATION))
         if self.web_time > 0:
-            return SPIDER_WEB_HEIGHT * sin(pi * min(1.0, self.web_time / SPIDER_WEB_DURATION))
+            return self.web_height
         if self.jump_time <= 0:
             return 0.0
-        progress = min(1.0, self.jump_time / JUMP_DURATION)
-        return 4 * JUMP_HEIGHT * progress * (1 - progress)
+        progress = min(1.0, self.jump_time / self.jump_duration)
+        return 4 * self.jump_peak * progress * (1 - progress)
 
     @classmethod
     def at(cls, point: Point, facing: int = 1):
@@ -74,6 +99,8 @@ class Motion:
     stairs: int = 0
     jump: bool = False
     web: bool = False
+    jump_held: bool = False
+    web_aiming: bool = False
 
 
 @dataclass
@@ -250,9 +277,12 @@ class World:
     def start_recording(self, monster_kind: str | None = None):
         self.echo_selecting = False
         if self.recording is None:
+            # 녹화용 분신을 만들기 전에 기존 재현 분신을 없애 한 명만 유지한다.
+            self._remove_echo()
             start = Point(self.player.x, self.player.floor)
             facing = self.player.facing
             self.recording = Recording(start, facing, Actor.at(start, facing), monster_kind=monster_kind)
+            self._update_doors(0)
             self.notify('분신으로 이동하고 필요한 자리에서 기다리세요.')
 
     @property
@@ -454,11 +484,119 @@ class World:
             if gate.door.floor == floor and not state.open:
                 yield gate.door.x
 
-    def _move_x(self, actor: Actor, amount: float, ignore_barrier=None):
+    def _spider_surfaces(self, floor):
+        # 충돌 가능한 문과 벽만 사용한다. 경비 몬스터와 배경 무늬는 제외한다.
+        for gate, state in zip(self.stage.gates, self.doors):
+            if not state.open and gate.door.floor == floor:
+                yield gate.door.x
+        for wall in self.stage.walls:
+            if wall.floor == floor:
+                yield wall.x
+        if self.stage.sequence and not self.sequence_unlocked and self.stage.sequence.door.floor == floor:
+            yield self.stage.sequence.door.x
+        if self.stage.sync_gate and not self.sync_unlocked and self.stage.sync_gate.door.floor == floor:
+            yield self.stage.sync_gate.door.x
+        if self.stage.isolation:
+            room = self.stage.isolation
+            door = room.door if self.isolation_closed else room.exit_gate
+            if door.floor == floor:
+                yield door.x
+
+    def spider_web_target(self, actor, aim_x):
+        """위·대각선 방향의 광선이 실제 장애물이나 위층 바닥에 닿는 첫 지점."""
+        origin_x, origin_y = actor.x, actor.jump_height + 34
+        dx, dy = aim_x / hypot(aim_x, 1), 1 / hypot(aim_x, 1)
+        hits = []
+        for beam in self.stage.web_beams:
+            if beam.floor != actor.floor:
+                continue
+            distance = (beam.underside - origin_y) / dy
+            x = origin_x + dx * distance
+            if 0 < distance <= SPIDER_AIM_REACH and beam.left <= x <= beam.right:
+                hits.append((distance, x, beam.underside))
+        if actor.floor + 1 < self.stage.floors:
+            # 다층 맵의 층 간격과 바닥 두께. 후반 맵은 원본 이미지 비율을 따른다.
+            if self.index in (6, 7, 8):
+                levels = (0, 235 * 400 / 231, 462 * 400 / 231,
+                          462 * 400 / 231 + 400, 462 * 400 / 231 + 400 + 235 * 400 / 231)
+                ceiling = levels[actor.floor + 1] - levels[actor.floor] - 35
+            else:
+                ceiling = 365
+            distance = (ceiling - origin_y) / dy
+            if 0 < distance <= SPIDER_AIM_REACH and LEFT <= origin_x + dx * distance <= RIGHT:
+                hits.append((distance, origin_x + dx * distance, ceiling))
+        if dx:
+            for wall in (LEFT, RIGHT, *self._spider_surfaces(actor.floor)):
+                distance = (wall - origin_x) / dx
+                y = origin_y + distance * dy
+                limit = 365 if wall in (LEFT, RIGHT) else SPIDER_DOOR_CLIMB_HEIGHT
+                if 0 < distance <= SPIDER_AIM_REACH and 0 < y <= limit:
+                    hits.append((distance, wall, y))
+        for wall in self._spider_surfaces(actor.floor):
+            distance = (SPIDER_DOOR_CLIMB_HEIGHT - origin_y) / dy
+            x = origin_x + dx * distance
+            if 0 < distance <= SPIDER_AIM_REACH and abs(x - wall) <= GATE_HALF_WIDTH:
+                hits.append((distance, x, SPIDER_DOOR_CLIMB_HEIGHT))
+        if not hits:
+            return None
+        _, x, y = min(hits)
+        return x, y
+
+    def _swing(self, actor: Actor, motion: Motion):
+        """거미줄 그네 한 스텝. 매달린 동안은 진자, 놓은 뒤에는 포물선으로 움직인다."""
+        actor.web_time += STEP
+        if not actor.web_flying and motion.jump:
+            # 놓는 순간의 진자 속도 그대로 날아간다.
+            actor.web_flying = True
+            actor.web_vx = actor.web_speed * actor.web_length * cos(actor.web_angle)
+            actor.web_vy = actor.web_speed * actor.web_length * sin(actor.web_angle)
+            if actor.web_anchor_beam:
+                # 문 위 조각상 줄에서 놓을 때 문 높이까지 도약할 수 있다.
+                actor.web_vy = max(actor.web_vy, 650.0)
+        if actor.web_flying:
+            if actor.web_anchor_beam and motion.horizontal:
+                actor.web_vx = motion.horizontal * MOVE_SPEED
+            actor.web_vy -= SPIDER_GRAVITY * STEP
+            actor.web_height = max(0.0, actor.web_height + actor.web_vy * STEP)
+            target = actor.x + actor.web_vx * STEP
+            self._move_x(actor, target - actor.x, over=actor.web_height >= SPIDER_OVER_HEIGHT)
+            if abs(actor.x - target) > 0.01:
+                actor.web_vx = 0.0  # 벽이나 닫힌 문에 부딪혔다
+            if actor.web_vx:
+                actor.facing = 1 if actor.web_vx > 0 else -1
+            if actor.web_height <= 0 and actor.web_vy <= 0:
+                actor.web_time, actor.web_flying, actor.web_height = 0.0, False, 0.0
+            return
+        if motion.horizontal:
+            actor.facing = motion.horizontal
+        if motion.stairs:
+            actor.web_length = max(SPIDER_WEB_MIN, min(max(SPIDER_WEB_MAX, actor.web_length),
+                                   actor.web_length - motion.stairs * SPIDER_REEL * STEP))
+        accel = -SPIDER_GRAVITY / actor.web_length * sin(actor.web_angle) + motion.horizontal * SPIDER_PUMP
+        actor.web_speed = (actor.web_speed + accel * STEP) * (1 - SPIDER_DAMPING * STEP)
+        angle = actor.web_angle + actor.web_speed * STEP
+        if abs(angle) > SPIDER_MAX_ANGLE:
+            angle, actor.web_speed = max(-SPIDER_MAX_ANGLE, min(SPIDER_MAX_ANGLE, angle)), 0.0
+        actor.web_angle = angle
+        height = actor.web_anchor_height - actor.web_length * cos(angle)
+        if height < 0 and cos(angle) > 0:
+            # 바닥을 뚫고 내려가지 않도록 줄이 팽팽해질 때까지 짧아진다.
+            actor.web_length = max(SPIDER_WEB_MIN, actor.web_anchor_height / cos(angle))
+            height = 0.0
+        target = actor.web_anchor_x + actor.web_length * sin(angle)
+        self._move_x(actor, target - actor.x, over=height >= SPIDER_OVER_HEIGHT)
+        if abs(actor.x - target) > 0.5:
+            # 낮게 흔들리다 벽이나 닫힌 문에 막혔다. 막힌 자리에 맞춰 줄 각도를 다시 잡는다.
+            actor.web_speed = 0.0
+            actor.web_angle = asin(max(-1.0, min(1.0, (actor.x - actor.web_anchor_x) / actor.web_length)))
+            height = actor.web_anchor_height - actor.web_length * cos(actor.web_angle)
+        actor.web_height = max(0.0, height)  # 줄이 길면 바닥을 스치며 흔들린다
+
+    def _move_x(self, actor: Actor, amount: float, ignore_barrier=None, over=False):
         start = actor.x
         target = min(RIGHT, max(LEFT, start + amount))
         margin = GATE_HALF_WIDTH + ACTOR_RADIUS
-        for wall in self._barriers(actor.floor):
+        for wall in () if over else self._barriers(actor.floor):
             if ignore_barrier is not None and abs(wall - ignore_barrier) < 0.01:
                 continue
             if start <= wall - margin and target > wall - margin:
@@ -491,37 +629,121 @@ class World:
                 actor.spider_up_latched = False
             if motion.horizontal:
                 actor.facing = motion.horizontal
-            if motion.web and actor.web_time == 0 and actor.jump_time == 0:
-                actor.web_time = STEP
-                actor.web_start_x = actor.x
-                actor.web_direction = actor.facing
-                actor.web_anchor_x = max(LEFT, min(RIGHT, actor.x + actor.facing * SPIDER_WEB_DISTANCE * 0.5))
+            if motion.web_aiming:
+                if not actor.web_aiming:
+                    actor.web_aim_x = actor.facing
+                actor.web_aiming = True
+                if motion.horizontal:
+                    actor.web_aim_x = motion.horizontal
+                elif motion.stairs > 0:
+                    actor.web_aim_x = 0
+                if actor.web_time > 0:
+                    self._swing(actor, Motion())
+                else:
+                    actor.moving = False
+                return
+            if motion.web:
+                target = self.spider_web_target(actor, actor.web_aim_x if actor.web_aiming else actor.facing)
+                actor.web_aiming = False
+                if target is not None:
+                    if actor.web_time > 0 and not actor.web_flying:
+                        vx = actor.web_speed * actor.web_length * cos(actor.web_angle)
+                        vy = actor.web_speed * actor.web_length * sin(actor.web_angle)
+                    else:
+                        vx = actor.web_vx if actor.web_flying else 0.0
+                        vy = actor.web_vy if actor.web_flying else 0.0
+                    height = actor.jump_height
+                    actor.web_anchor_x, target_y = target
+                    actor.web_anchor_beam = any(
+                        beam.floor == actor.floor and beam.left <= target[0] <= beam.right
+                        and abs(target_y - beam.underside) < 0.01 for beam in self.stage.web_beams
+                    )
+                    actor.web_anchor_height = target_y - 34
+                    offset = actor.x - actor.web_anchor_x
+                    vertical = actor.web_anchor_height - height
+                    actor.web_length = max(SPIDER_WEB_MIN, hypot(offset, vertical))
+                    actor.web_angle = atan2(offset, vertical)
+                    actor.web_speed = (vx * cos(actor.web_angle) + vy * sin(actor.web_angle)) / actor.web_length
+                    actor.web_time = STEP
+                    actor.web_height = height
+                    actor.jump_time = 0.0
+                    actor.web_flying = False
+                    return
+                self.notify('거미줄이 닿는 벽이나 천장이 없습니다.')
+            else:
+                actor.web_aiming = False
             if actor.web_time > 0:
-                progress = min(1.0, actor.web_time / SPIDER_WEB_DURATION)
-                target = actor.web_start_x + actor.web_direction * SPIDER_WEB_DISTANCE * progress
-                self._move_x(actor, target - actor.x)
-                actor.web_time = actor.web_time + STEP if progress < 1 else 0.0
+                self._swing(actor, motion)
                 return
             if motion.stairs > 0 and not actor.spider_up_latched and actor.jump_time == 0:
                 margin = GATE_HALF_WIDTH + ACTOR_RADIUS
-                for gate, state in zip(self.stage.gates, self.doors):
-                    if (not state.open and gate.door.floor == actor.floor
-                            and abs(actor.x - gate.door.x) <= margin + 18):
-                        side = -1 if actor.x < gate.door.x else 1
+                obstacles = [gate.door.x for gate, state in zip(self.stage.gates, self.doors)
+                             if not state.open and gate.door.floor == actor.floor]
+                obstacles.extend(wall.x for wall in self.stage.walls if wall.floor == actor.floor)
+                if self.stage.sequence and not self.sequence_unlocked and self.stage.sequence.door.floor == actor.floor:
+                    obstacles.append(self.stage.sequence.door.x)
+                if self.stage.sync_gate and not self.sync_unlocked and self.stage.sync_gate.door.floor == actor.floor:
+                    obstacles.append(self.stage.sync_gate.door.x)
+                if self.stage.isolation:
+                    room = self.stage.isolation
+                    door = room.door if self.isolation_closed else room.exit_gate
+                    if door.floor == actor.floor:
+                        obstacles.append(door.x)
+                for obstacle_x in obstacles:
+                    if abs(actor.x - obstacle_x) <= margin + 18:
+                        side = -1 if actor.x < obstacle_x else 1
                         actor.door_climb_time = STEP
-                        actor.door_climb_x = gate.door.x
+                        actor.door_climb_x = obstacle_x
                         actor.door_climb_start = actor.x
-                        actor.door_climb_end = gate.door.x - side * (margin + 4)
+                        actor.door_climb_end = obstacle_x - side * (margin + 4)
                         actor.facing = -side
                         actor.spider_up_latched = True
                         return
+            if (motion.stairs and actor.jump_time == 0
+                    and (actor.x <= LEFT + ACTOR_RADIUS or actor.x >= RIGHT - ACTOR_RADIUS)
+                    and 0 <= actor.floor + motion.stairs < self.stage.floors):
+                actor.elevator_target = actor.floor + motion.stairs
+                actor.elevator_time = 0.0
+                actor.moving = False
+                return
+        if monster_kind == 'beast':
+            if motion.jump and actor.jump_time == 0 and not motion.stairs:
+                actor.beast_charge_active = True
+                actor.beast_charge = 0.0
+            if actor.beast_charge_active:
+                if motion.horizontal:
+                    actor.facing = motion.horizontal
+                if motion.jump_held:
+                    actor.beast_charge += STEP
+                if not motion.jump_held or actor.beast_charge + 1e-9 >= BEAST_CHARGE_SECONDS:
+                    actor.beast_super_jump = actor.beast_charge + 1e-9 >= BEAST_CHARGE_SECONDS
+                    actor.jump_duration = BEAST_JUMP_DURATION if actor.beast_super_jump else JUMP_DURATION
+                    actor.jump_peak = BEAST_JUMP_HEIGHT if actor.beast_super_jump else JUMP_HEIGHT
+                    actor.jump_time = STEP
+                    actor.beast_charge_active = False
+                else:
+                    actor.moving = False
+                    return
+            elif actor.jump_time > 0:
+                actor.jump_time += STEP
+                if actor.jump_time >= actor.jump_duration:
+                    actor.jump_time = 0.0
+                    actor.beast_super_jump = False
+            if motion.horizontal:
+                actor.facing = motion.horizontal
+            if actor.jump_time > 0 or not motion.stairs:
+                self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
+                return
+            # 땅에 있을 때의 사다리와 승강기는 기존 방식으로 처리한다.
         if motion.horizontal:
             actor.facing = motion.horizontal
-        if motion.jump and actor.jump_time == 0 and not motion.stairs:
+        if motion.jump and actor.jump_time == 0 and not motion.stairs and monster_kind != 'beast':
+            actor.jump_duration = JUMP_DURATION
+            actor.jump_peak = JUMP_HEIGHT
             actor.jump_time = STEP
         elif actor.jump_time > 0:
             actor.jump_time += STEP
-            if actor.jump_time >= JUMP_DURATION:
+            if actor.jump_time >= actor.jump_duration:
                 actor.jump_time = 0.0
         self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
         if motion.stairs and actor.jump_time == 0:
@@ -538,13 +760,6 @@ class World:
                     actor.x = stair.x
                     actor.floor += motion.stairs
                     return
-            if (monster_kind == 'crawler' and not (motion.stairs > 0 and actor.spider_up_latched)
-                    and 0 <= actor.floor + motion.stairs < self.stage.floors):
-                # The dungeon background is a continuous climbable wall.
-                actor.elevator_target = actor.floor + motion.stairs
-                actor.elevator_time = 0.0
-                actor.moving = False
-
     @staticmethod
     def _near(actor: Actor, point: Point, distance: float) -> bool:
         return (actor.elevator_target is None and actor.jump_time == 0 and actor.web_time == 0 and actor.door_climb_time == 0

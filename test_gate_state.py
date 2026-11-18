@@ -5,6 +5,28 @@ from world import Actor, Echo, Motion, World
 
 
 class FirstGateTests(unittest.TestCase):
+    def test_starting_any_new_echo_removes_previous_echo_and_releases_plate(self):
+        for kind in (None, 'beast', 'crawler'):
+            with self.subTest(kind=kind):
+                world = World(0)
+                gate = world.stage.gates[0]
+                world.player.x = 100
+                previous = Actor.at(gate.plate)
+                world.echo = Echo(previous, (Motion(),) * 100)
+                enemy = world.enemies[0]
+                enemy.target = previous
+                world._update_doors(STEP)
+                self.assertTrue(world.doors[0].pressed)
+                world.start_recording(kind)
+                self.assertIsNone(world.echo)
+                self.assertIsNotNone(world.recording)
+                self.assertEqual(world.recording.monster_kind, kind)
+                self.assertFalse(world.doors[0].pressed)
+                self.assertIsNone(enemy.target)
+                self.assertEqual(len(world.echo_actors()), 1)
+                world.cancel_recording()
+                self.assertEqual(len(world.echo_actors()), 0)
+
     def test_plate_releases_and_gate_closes_after_echo_disappears(self):
         world = World(0)
         world.enemies.clear()
