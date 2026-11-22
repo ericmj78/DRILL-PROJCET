@@ -48,6 +48,19 @@ class Gate:
 
 
 @dataclass(frozen=True)
+class JumpBlock:
+    """점프 블록. 점프 높이가 height 이상일 때만 넘어가고, 걷거나 낮게 뛰면 벽처럼 막힌다.
+
+    본체·보통 점프는 높이 42, 뿔짐승 분신의 슈퍼 점프(Space 1초)는 높이 100이라
+    기본 높이 70은 슈퍼 점프로만 넘을 수 있다.
+    """
+    floor: int
+    x: int
+    height: int = 70
+    width: int = 44
+
+
+@dataclass(frozen=True)
 class WebBeam:
     floor: int
     left: int
@@ -182,6 +195,9 @@ class Stage:
     elevators: tuple[Stair, ...] = ()
     enemy_scale: float = 1.0  # 몬스터 체력·피해 배율
     web_beams: tuple[WebBeam, ...] = ()
+    jump_blocks: tuple[JumpBlock, ...] = ()  # 점프 맵용. 예: jump_blocks=(JumpBlock(0, 900),)
+    poison_zones: tuple[tuple[int, int, int], ...] = ()
+    poison_platforms: tuple[tuple[int, int, int], ...] = ()
 
 
 STAGES = (
@@ -194,7 +210,11 @@ STAGES = (
             Gate('A', Point(267, 0), Point(740, 0)),
             Gate('B', Point(430, 0), Point(1400, 0)),
         ),
-        web_beams=(WebBeam(0, 680, 800, 118),),
+        web_beams=(WebBeam(0, 680, 800, 215),
+                   WebBeam(1, 699, 819, 175), WebBeam(1, 882, 1002, 175),
+                   WebBeam(1, 1062, 1182, 175)),
+        poison_zones=((1, 710, 900), (1, 980, 1170)),
+        poison_platforms=((1, 900, 980),),
         enemies=(
             EnemySpawn('crawler', Point(1100, 0), (1000, 1200)),
             EnemySpawn('crawler', Point(1800, 0), (1700, 1900)),

@@ -30,14 +30,39 @@ class SpiderEchoTests(unittest.TestCase):
             b_pressed |= w.doors[1].pressed
         self.assertTrue(b_pressed)
 
-    def test_web_range_is_120_for_real_obstacles(self):
-        gate_x = self.world.stage.gates[0].door.x
-        near, far = Actor(gate_x - 60, 0), Actor(gate_x - 200, 0)
-        target = self.world.spider_web_target(near, 1)
-        self.assertIsNotNone(target)
-        self.assertEqual(target[0], gate_x)
-        self.assertIsNone(self.world.spider_web_target(far, 1))
-        self.assertIsNone(self.world.spider_web_target(Actor(1000, 0), 0))
+    def test_web_range_reaches_the_raised_statue(self):
+        w = self.world
+        beam = w.stage.web_beams[0]
+        gate_x = w.stage.gates[0].door.x
+        # 조각상 바로 아래에서는 위로, 조금 떨어진 곳에서는 대각선으로 닿는다.
+        self.assertEqual(w.spider_web_target(Actor(beam.left + 40, 0), 0), (beam.left + 40, beam.underside))
+        hit = w.spider_web_target(Actor(beam.left - 120, 0), 1)
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit[1], beam.underside)
+        # 닫힌 A 문 옆면에도 가까이에서는 붙는다.
+        self.assertEqual(w.spider_web_target(Actor(gate_x - 60, 0), 1)[0], gate_x)
+        # 너무 멀거나 위에 아무것도 없으면 붙지 않는다.
+        self.assertIsNone(w.spider_web_target(Actor(gate_x - 300, 0), 1))
+        self.assertIsNone(w.spider_web_target(Actor(1000, 0), 0))
+
+    def test_aiming_is_left_out_of_the_replay(self):
+        w = self.world
+        w.player.x = 600
+        w.start_recording('crawler')
+        for frame in range(40):     # 땅에서 오래 조준해도
+            w.step(Motion(horizontal=1 if frame > 20 else 0, web_aiming=True))
+        self.assertEqual(w.recording.inputs, [])   # 녹화에는 남지 않는다
+        w.step(Motion(web=True))
+        anchor = w.recording.preview.web_anchor_x
+        for _ in range(20):
+            w.step(Motion())
+        w.toggle_recording()
+        aiming_seen = False
+        for _ in range(20):
+            w.step()
+            aiming_seen |= w.echo.actor.web_aiming
+        self.assertFalse(aiming_seen)               # 재현에서 조준 장면이 나오지 않고
+        self.assertAlmostEqual(w.echo.actor.web_anchor_x, anchor)   # 같은 곳에 바로 쏜다
 
     @patch('world.SPIDER_AIM_REACH', 480)
     def test_aim_shows_real_surface_and_fire_replaces_old_rope(self):
@@ -72,15 +97,18 @@ class SpiderEchoTests(unittest.TestCase):
         w.start_recording('crawler')
         states = []
         for frame in range(80):
+            kept = len(w.recording.inputs)
             w.step(Motion(horizontal=1, jump=frame == 51, web=frame in (1, 54),
                           web_aiming=frame in (0, 52, 53)))
             actor = w.recording.preview
-            states.append((actor.x, actor.jump_height, actor.web_flying, actor.web_anchor_x))
-        self.assertTrue(states[53][2])
-        self.assertFalse(states[54][2])
-        self.assertNotEqual(states[53][3], states[54][3])
-        self.assertAlmostEqual(states[53][0], states[54][0])
-        self.assertAlmostEqual(states[53][1], states[54][1])
+            if len(w.recording.inputs) > kept:   # 땅에서 조준한 0번 프레임만 빠지고, 공중 조준은 몸 움직임이 남는다
+                states.append((actor.x, actor.jump_height, actor.web_flying, actor.web_anchor_x))
+        self.assertEqual(len(states), 79)
+        self.assertTrue(states[52][2])
+        self.assertFalse(states[53][2])
+        self.assertNotEqual(states[52][3], states[53][3])
+        self.assertAlmostEqual(states[52][0], states[53][0])
+        self.assertAlmostEqual(states[52][1], states[53][1])
         w.toggle_recording()
         for expected in states[:-1]:
             w.step()
@@ -153,9 +181,11 @@ class SpiderEchoTests(unittest.TestCase):
         recorded = []
         for frame in range(150):
             push = 1 if (frame // 25) % 2 == 0 else -1
+            kept = len(w.recording.inputs)
             w.step(Motion(push, 1 if 60 < frame < 80 else 0, jump=frame == 130,
                           web=frame == 1, web_aiming=frame == 0))
-            recorded.append((w.recording.preview.x, w.recording.preview.jump_height))
+            if len(w.recording.inputs) > kept:   # 땅에서 조준한 프레임은 재현에 없다
+                recorded.append((w.recording.preview.x, w.recording.preview.jump_height))
         self.assertGreater(max(h for _, h in recorded), 30)
         w.toggle_recording()
         for x, height in recorded[:-1]:

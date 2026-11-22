@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pico2d import load_image
 from pico2d import pico2d as canvas
+from asset_paths import ASSET_ROOT, asset_path
 
 WINDUP, RECOVERY = 0.31, 0.65  # world.py에서 적이 공격을 준비하고 회복하는 시간과 같아야 한다.
 STRIKE = 0.18                  # 회복 시간 중 타격 자세로 뻗어 있는 구간
@@ -145,7 +146,8 @@ def load_attack_fx(folder: Path) -> dict:
     sheets = {}
     for path in folder.glob('*.json'):
         meta = json.loads(path.read_text(encoding='utf-8'))['meta']['pixelfx']
-        sheets[path.stem] = (load_image(str(path.with_suffix('.png'))), meta)
+        image_name = path.with_suffix('.png').relative_to(ASSET_ROOT)
+        sheets[path.stem] = (load_image(str(asset_path(image_name))), meta)
     return sheets
 
 

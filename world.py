@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import asin, atan2, cos, hypot, pi, sin
 
 import boss_skills
@@ -30,7 +30,9 @@ SPIDER_PUMP = 3.2          # ←→로 주는 반동 (rad/s²)
 SPIDER_DAMPING = 0.15      # 초당 흔들림이 줄어드는 비율
 SPIDER_REEL = 170          # ↑↓로 줄을 감고 푸는 속도 (px/s)
 SPIDER_WEB_MIN, SPIDER_WEB_MAX = 22, 190
-SPIDER_AIM_REACH = 120
+# 거미줄이 닿는 거리. 1스테이지 조각상(아랫면 215)에 바로 아래에서는 위로 181,
+# 대각선으로는 256이 필요해 대각선 발사까지 닿도록 260으로 잡는다.
+SPIDER_AIM_REACH = 260
 SPIDER_MAX_ANGLE = 1.35    # 줄이 수직에서 벌어질 수 있는 최대 각 (rad)
 SPIDER_OVER_HEIGHT = 125   # 이 높이 이상이면 문과 벽 위로 넘어간다
 SPIDER_DOOR_CLIMB_DURATION = 1.2
@@ -101,6 +103,7 @@ class Motion:
     web: bool = False
     jump_held: bool = False
     web_aiming: bool = False
+    aim_x: int | None = None   # 녹화된 발사 방향 (-1, 0, 1). 재현은 조준 없이 이 방향으로 쏜다.
 
 
 @dataclass
@@ -339,8 +342,19 @@ class World:
         self.message_time = max(0, self.message_time - STEP)
         recording = self.recording
         if recording is not None:
-            self._move(self.recording.preview, motion, self.recording.monster_kind)
-            self.recording.inputs.append(motion)
+            preview = recording.preview
+            spider = recording.monster_kind == 'crawler'
+            aim = preview.web_aim_x if preview.web_aiming else (motion.horizontal or preview.facing)
+            hanging = preview.web_time > 0
+            self._move(preview, motion, recording.monster_kind)
+            if spider and motion.web_aiming:
+                # 조준하는 동안은 재현에 남기지 않는다. 줄에 매달리거나 날아가는 중이면 몸의 움직임만 남긴다.
+                if hanging:
+                    recording.inputs.append(Motion())
+            elif spider and motion.web:
+                recording.inputs.append(replace(motion, aim_x=aim))
+            else:
+                recording.inputs.append(motion)
 
         self.time += STEP
         self.guard_open_time = max(0, self.guard_open_time - STEP)
@@ -368,6 +382,14 @@ class World:
         boss_skills.update_gravity(self, motion.horizontal if recording is None else 0)
         if self.result != 'playing':
             return
+        for floor, left, right in self.stage.poison_zones:
+            if (self.player.floor == floor and left <= self.player.x <= right
+                    and self.player.elevator_target is None and self.player.jump_height < 12):
+                self.hurt(max(1, round(self.max_health * HAZARD_RATIO)), '독에 닿았습니다!')
+            for actor in self.echo_actors():
+                if (actor.floor == floor and left <= actor.x <= right
+                        and actor.elevator_target is None and actor.jump_height < 12):
+                    self.hurt_echo(actor, max(1, round(self.max_health * HAZARD_RATIO)))
         for hazard in self.stage.hidden_hazards:
             # 분신의 빛이 닿지 않은 함정은 뛰어넘을 수도 없다. 무작정 점프로는 통과하지 못한다.
             airborne = self.player.jump_time > 0 and self.hazard_lit(hazard)
@@ -603,6 +625,15 @@ class World:
                 target = wall - margin
             elif start >= wall + margin and target < wall + margin:
                 target = wall + margin
+        for block in self.stage.jump_blocks:
+            # 점프 블록은 그 높이보다 높이 떠 있을 때만 넘어간다.
+            if block.floor != actor.floor or actor.jump_height >= block.height:
+                continue
+            edge = block.width / 2 + ACTOR_RADIUS
+            if start <= block.x - edge and target > block.x - edge:
+                target = block.x - edge
+            elif start >= block.x + edge and target < block.x + edge:
+                target = block.x + edge
         actor.x = target
         distance = abs(target - start)
         actor.moving = distance > 0.001
@@ -643,7 +674,11 @@ class World:
                     actor.moving = False
                 return
             if motion.web:
-                target = self.spider_web_target(actor, actor.web_aim_x if actor.web_aiming else actor.facing)
+                if motion.aim_x is not None:
+                    aim = motion.aim_x
+                else:
+                    aim = actor.web_aim_x if actor.web_aiming else actor.facing
+                target = self.spider_web_target(actor, aim)
                 actor.web_aiming = False
                 if target is not None:
                     if actor.web_time > 0 and not actor.web_flying:

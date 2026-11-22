@@ -198,6 +198,11 @@ def main():
                 elif key == SDLK_SPACE and key not in pressed:
                     pressed.add(key)
                     pending_jump = True
+                elif (key == SDLK_DOWN and SDLK_f in pressed and world.recording is not None
+                      and world.recording.monster_kind == 'crawler'):
+                    # F를 누른 채 ↓를 누르면 거미줄 조준을 취소한다. F를 떼도 발사되지 않는다.
+                    pressed.discard(SDLK_f)
+                    world.notify('거미줄 조준을 취소했습니다.')
                 elif key in (SDLK_UP, SDLK_DOWN):
                     pending_stairs = 1 if key == SDLK_UP else -1
                     if world.recording is not None and world.recording.monster_kind == 'crawler':
