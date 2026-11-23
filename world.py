@@ -188,6 +188,12 @@ class World:
         self.revealed = set()   # 레이더로 드러난 숨은 발판 번호
         self.lens_lit = False   # 렌즈가 켜져 그 층 발판이 모두 드러났는가
         self.switched = [False] * len(self.stage.switches)   # 눌려 문이 열린 스위치
+        sky = self.stage.sky
+        self.sky_blocks = [list(block) for block in sky.blocks] if sky else []   # 하늘 땅 [x, 높이]
+        self.sky_progress = 0      # 순서대로 눌린 하늘 스위치 수
+        self.sky_on = None         # 본체가 지금 밟고 있는 하늘 스위치 (한 번 밟을 때 한 번만 판정)
+        self.sky_hold = None       # 마법책 분신이 염력으로 잡은 땅 번호
+        self.sky_target = (0.0, 0.0)
         self.reveal_time = 0.0  # 외눈 유령 분신이 사라진 뒤 남은 공개 시간
         self.health = self.max_health
         self.damage_texts = []  # 맞은 자리에 뜨는 피해 숫자 [x, 층, 지난 시간, 글자, 본체가 맞았는가]
@@ -307,7 +313,8 @@ class World:
             self.recording = Recording(start, facing, Actor.at(start, facing), monster_kind=monster_kind,
                                        clock=clock)
             self._update_doors(0)
-            self.notify('분신으로 이동하고 필요한 자리에서 기다리세요.')
+            self.notify('마우스로 분신 둘레의 하늘 땅을 끌어 길을 만드세요.' if self._sky_book()
+                        else '분신으로 이동하고 필요한 자리에서 기다리세요.')
 
     @property
     def pending_monster_echo(self):
@@ -437,6 +444,7 @@ class World:
 
         self._update_reveal()
         self._update_switches()
+        self._update_sky()
         if self.player.base < -PIT_DEPTH:
             self.invulnerable = 0
             self.hurt(self.health, '구덩이에 떨어졌습니다!')
@@ -565,6 +573,9 @@ class World:
         for switch, on in zip(self.stage.switches, self.switched):
             if not on and switch.door.floor == floor:
                 yield switch.door.x
+        sky = self.stage.sky
+        if sky and self.sky_progress < len(sky.switches) and sky.door.floor == floor:
+            yield sky.door.x
 
     def _spider_surfaces(self, floor):
         # 충돌 가능한 문과 벽만 사용한다. 경비 몬스터와 배경 무늬는 제외한다.
@@ -747,6 +758,11 @@ class World:
                 left, right = self.platform_span(index)
                 if left <= actor.x <= right:
                     yield float(platform.height)
+        if self.sky_blocks and actor.floor == 0:
+            half = self.stage.sky.width / 2
+            for x, height in self.sky_blocks:
+                if abs(actor.x - x) <= half:
+                    yield float(height)
 
     def _settle(self, actor: Actor, before: float):
         """발판 착지와 낙하. 점프가 내려오다 발판 높이를 지나면 그 위에 선다."""
@@ -818,6 +834,75 @@ class World:
                     self.switched[index] = True
                     self.notify('스위치가 눌렸습니다! 잠긴 문이 열렸습니다.')
                     break
+
+    def _sky_book(self):
+        """염력을 쓸 수 있는 마법책 분신(녹화 중). 없으면 None."""
+        if self.stage.sky and self.recording is not None and self.recording.monster_kind == 'magic_book':
+            return self.recording.preview
+        return None
+
+    def _sky_clamp(self, book: Actor, x: float, height: float) -> tuple[float, float]:
+        """땅이 놓일 자리를 분신 둘레 reach 원 안, 맵 안, 바닥 위로 맞춘다."""
+        sky = self.stage.sky
+        cx, cy = book.x, book.jump_height + 30
+        distance = hypot(x - cx, height - cy)
+        if distance > sky.reach:
+            x, height = cx + (x - cx) * sky.reach / distance, cy + (height - cy) * sky.reach / distance
+        half = sky.width / 2
+        return min(max(x, LEFT + half), RIGHT - half), max(20.0, height)
+
+    def sky_grab(self, x: float, height: float) -> bool:
+        """마우스를 누른 자리의 하늘 땅을 잡는다. 분신 둘레 reach 안의 땅만 잡힌다."""
+        book = self._sky_book()
+        if book is None:
+            return False
+        sky = self.stage.sky
+        center = (book.x, book.jump_height + 30)
+        near = [index for index, (bx, bh) in enumerate(self.sky_blocks)
+                if abs(x - bx) <= sky.width / 2 + 10 and abs(height - bh) <= 24
+                and hypot(bx - center[0], bh - center[1]) <= sky.reach]
+        if not near:
+            if any(abs(x - bx) <= sky.width / 2 + 10 and abs(height - bh) <= 24 for bx, bh in self.sky_blocks):
+                self.notify('염력이 닿지 않습니다. 분신을 땅 가까이 데려가세요.')
+            return False
+        self.sky_hold = min(near, key=lambda index: abs(x - self.sky_blocks[index][0]))
+        self.sky_drag(x, height)
+        return True
+
+    def sky_drag(self, x: float, height: float):
+        self.sky_target = (x, height)
+        book = self._sky_book()
+        if self.sky_hold is not None and book is not None:
+            self.sky_blocks[self.sky_hold] = list(self._sky_clamp(book, x, height))
+
+    def sky_release(self):
+        self.sky_hold = None
+
+    def _update_sky(self):
+        sky = self.stage.sky
+        if not sky:
+            return
+        if self._sky_book() is None:
+            self.sky_hold = None
+        elif self.sky_hold is not None:
+            self.sky_drag(*self.sky_target)   # 분신이 걸어가면 잡은 땅도 끌려온다
+        player = self.player
+        on = None
+        if player.elevator_target is None and player.jump_time == 0 and player.fall_speed == 0:
+            on = next((index for index, (x, height) in enumerate(sky.switches)
+                       if player.floor == 0 and abs(player.base - height) < 1
+                       and abs(player.x - x) <= PLATE_RANGE), None)
+        if on is not None and on != self.sky_on and self.sky_progress < len(sky.switches):
+            if on == self.sky_progress:
+                self.sky_progress += 1
+                self.notify('하늘 문이 열렸습니다!' if self.sky_progress == len(sky.switches)
+                            else f'{on + 1}번 스위치가 켜졌습니다.')
+            elif on > self.sky_progress:
+                self.sky_progress = 0
+                self.sky_blocks = [list(block) for block in sky.blocks]
+                self.sky_hold = None
+                self.notify('순서가 틀렸습니다! 스위치와 하늘 땅이 처음으로 돌아갑니다.')
+        self.sky_on = on
 
     def _move(self, actor: Actor, motion: Motion, monster_kind=None):
         self._ride(actor)

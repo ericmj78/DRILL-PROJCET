@@ -2,7 +2,7 @@ import json
 import sdl2
 from copy import copy
 from ctypes import byref, c_int
-from math import cos, sin
+from math import cos, hypot, sin
 from os import environ
 from pathlib import Path
 from time import perf_counter
@@ -423,6 +423,23 @@ class View:
                             draw_region(floor_image, (sx, floor_row, ex - sx, floor_image.h - floor_row),
                                         start - self.camera_x, floor_y - 92, end - start, 92)
                         start = max(start, right)
+            elif world.stage.sky:
+                # 하늘 땅: 위로 갈수록 짙어지는 하늘, 천천히 흐르는 구름, 돌바닥 한 줄.
+                floor_y = self.floor_y[0]
+                for band in range(12):
+                    t = band / 11
+                    box(0, HEIGHT * band / 12, WIDTH, HEIGHT * (band + 1) / 12 + 1,
+                        (round(150 - 90 * t), round(196 - 100 * t), round(232 - 60 * t)))
+                for i in range(9):
+                    x = (i * 263 + world.time * (6 + i % 3)) % (RIGHT + 200) - 100 - self.camera_x * 0.5
+                    y = floor_y + 140 + (i * 97) % 380
+                    for dx, radius in ((-26, 18), (0, 26), (28, 20)):
+                        self._disc(x + dx, y, radius, (214, 230, 244))
+                image = self.stage1_pixel_image
+                floor_row = round(image.h * 610 / 724)
+                box(0, 0, WIDTH, floor_y - 90, (40, 36, 48))
+                draw_region(image, (0, floor_row, image.w, image.h - floor_row),
+                            -self.camera_x, floor_y - 92, WIDTH * 2, 92)
             else:
                 for floor, floor_y in enumerate(self.floor_y):
                     corridor = self.floor_images[world.index][floor]
@@ -613,6 +630,47 @@ class View:
             vertex.position = canvas.SDL_FPoint(x, height - y)
             vertex.color = canvas.SDL_Color(r, g, b, a)
         canvas.SDL_RenderGeometry(canvas.renderer, None, vertices, len(points), None, 0)
+
+    def _draw_sky_puzzle(self, world):
+        """하늘 땅 퍼즐: 염력 범위, 날개 달린 땅, 1·2·3 스위치, 하늘 문."""
+        sky, floor_y, time = world.stage.sky, self.floor_y[0], world.time
+        book = world._sky_book()
+        if book is not None:
+            # 마법책 분신의 염력이 닿는 원
+            x, y = book.x - self.camera_x, floor_y + book.jump_height + 30
+            points, colors = [], []
+            for i in range(40):
+                a, b = i / 40 * 6.2832, (i + 1) / 40 * 6.2832
+                points += [(x, y), (x + sky.reach * cos(a), y + sky.reach * sin(a)),
+                           (x + sky.reach * cos(b), y + sky.reach * sin(b))]
+                colors += [(190, 120, 255, 10), (190, 120, 255, 46), (190, 120, 255, 46)]
+            self._polygon(points, colors)
+        half = sky.width / 2
+        for index, (bx, height) in enumerate(world.sky_blocks):
+            x, y = bx - self.camera_x, floor_y + height
+            flap = sin(time * 7 + index * 1.7) * 9
+            for side in (-1, 1):
+                root = x + side * (half - 6)
+                tip = x + side * (half + 34)
+                self._polygon([(root, y - 6), (tip, y + 18 + flap), (root + side * 18, y - 14 + flap * 0.5)],
+                              [(250, 250, 255, 255), (214, 226, 246, 255), (232, 238, 252, 255)])
+            self._polygon([(x - half, y - 18), (x + half, y - 18), (x, y - 44)],
+                          [(92, 70, 56, 255), (92, 70, 56, 255), (58, 44, 38, 255)])
+            box(x - half, y - 18, x + half, y - 6, (124, 92, 66))
+            box(x - half, y - 6, x + half, y, (96, 178, 92))
+            if index == world.sky_hold:
+                box(x - half - 3, y - 47, x + half + 3, y + 3, CYAN, filled=False)
+            elif book is not None and hypot(bx - book.x, height - book.jump_height - 30) <= sky.reach:
+                box(x - half - 2, y - 46, x + half + 2, y + 2, (214, 176, 255), filled=False)
+        for index, (sx, height) in enumerate(sky.switches):
+            on = index < world.sky_progress
+            x, y = sx - self.camera_x, floor_y + height
+            draw_grounded(self.lever_art, LEVER_FRAMES[on], x, y, 34)
+            self.heading.draw(x - 7, y + 52, str(index + 1), CYAN if on else GOLD)
+        opened = world.sky_progress == len(sky.switches)
+        dx = sky.door.x - self.camera_x
+        draw_grounded(self.gate_art, GATE_FRAMES[opened], dx, floor_y, 112)
+        self.small.draw(dx - 22, floor_y + 124, '열린 문' if opened else '하늘 문', CYAN if opened else GOLD)
 
     def _disc(self, x, y, radius, color, sides=14):
         points, colors = [], []
@@ -927,6 +985,8 @@ class View:
             dx, dy = switch.door.x - self.camera_x, self.floor_y[switch.door.floor]
             draw_grounded(self.gate_art, GATE_FRAMES[on], dx, dy, 112)
             self.small.draw(dx - 22, dy + 124, '열린 문' if on else '잠긴 문', CYAN if on else GOLD)
+        if stage.sky:
+            self._draw_sky_puzzle(world)
         for actor in world._watchers():
             if actor.radar and actor.elevator_target is None:
                 x = actor.x - self.camera_x

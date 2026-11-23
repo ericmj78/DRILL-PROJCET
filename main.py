@@ -1,7 +1,7 @@
 from time import perf_counter
 
 from pico2d import (
-    SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_b, SDLK_BACKSPACE, SDLK_c,
+    SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_b, SDLK_BACKSPACE, SDLK_c,
     SDLK_d, SDLK_DOWN, SDLK_e, SDLK_f, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
     SDLK_s, SDLK_SPACE, SDLK_UP, clear_canvas, close_canvas, delay, get_events,
     hide_lattice, open_canvas, update_canvas,
@@ -91,6 +91,18 @@ def main():
                             canvas.window, canvas.SDL_WINDOW_FULLSCREEN_DESKTOP if menu.fullscreen else 0)
                     elif action:
                         menu.open(action)
+                    continue
+                if (screen == 'play' and world.stage.sky
+                        and event.type in (SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_MOUSEBUTTONUP)):
+                    # 마법책 분신의 염력: 마우스로 하늘 땅을 잡아 끌고 놓는다. 화면 좌표를 맵 좌표로 바꾼다.
+                    x = event.x + view.camera_x
+                    height = HEIGHT - 1 - event.y - view.floor_y[0]
+                    if event.type == SDL_MOUSEBUTTONDOWN:
+                        world.sky_grab(x, height)
+                    elif event.type == SDL_MOUSEMOTION:
+                        world.sky_drag(x, height)
+                    else:
+                        world.sky_release()
                     continue
                 if event.type != SDL_KEYDOWN:
                     continue

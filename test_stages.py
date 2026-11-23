@@ -77,6 +77,23 @@ class Bot:
         while (self.me.jump_time > 0 or self.me.fall_speed) and self.w.result == 'playing':
             self.tick(direction)
 
+    def hop(self, x):
+        """보통 점프로 뛰어 x 쪽으로 몸을 틀며 착지한다."""
+        self.tick(1 if x > self.me.x else -1, jump=True)
+        while (self.me.jump_time > 0 or self.me.fall_speed) and self.w.result == 'playing':
+            gap = x - self.me.x
+            self.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
+
+    def carry(self, index, x, height):
+        """마법책 분신: index번 하늘 땅 아래로 가서 마우스로 잡고 (x, 높이)로 끌어다 놓는다."""
+        self.go(self.w.sky_blocks[index][0])
+        bx, bh = self.w.sky_blocks[index]
+        assert self.w.sky_grab(bx, bh), f'하늘 땅을 잡지 못했습니다 {self}'
+        self.w.sky_drag(x, height)
+        self.go(x)
+        self.w.sky_release()
+        assert self.w.sky_blocks[index] == [x, height], f'하늘 땅이 제자리에 놓이지 않았습니다 {self}'
+
     def _ghosts_coming(self, near):
         """같은 단이나 바로 위아래 단에서 다가오는(또는 바로 옆의) 층 유령."""
         me = self.me
@@ -351,38 +368,41 @@ def stage_3(b):
 
 @solution(4)
 def stage_4(b):
+    # 하늘 땅은 4개뿐이다. 땅을 38씩 계단으로 쌓아 1번(높이 150) → 2번(110) → 3번(220) 턱에 오른다.
     b.kill('magic_book')
-    b.go(500)
-    b.rec()
-    b.go(160)
-    b.wait(0.6)
-    b.rec()
-    b.go(960)
-    b.kill('potion_slime')
     b.kill('magic_armor')
-    b.go(1220)
+    b.kill('potion_slime')
+    b.go(450)
+    b.w.start_recording('magic_book')              # C → 마법책 분신
+    b.carry(0, 360, 38)
+    b.carry(1, 440, 76)
+    b.carry(2, 520, 114)
     b.rec()
-    b.jump(1)       # 2번 위를 뛰어넘는다
-    b.go(1500)      # 1번 통과
-    b.go(1262)      # 되돌아와 2번 통과
-    b.jump(1)       # 2번과 1번을 연달아 뛰어넘는다
-    b.jump(1)
-    b.go(1660)      # 3번 통과
+    b.go(330)
+    for x in (360, 440, 520, 620):                 # 계단을 올라 1번 스위치
+        b.hop(x)
+    assert b.w.sky_progress == 1, f'1번 스위치가 켜지지 않았습니다 {b}'
+    b.go(1000)                                     # 턱에서 걸어 내려온다
+    b.w.start_recording('magic_book')
+    b.carry(3, 1260, 76)                           # 2번 턱 아래에 땅 두 개
+    b.carry(2, 1180, 38)
     b.rec()
-    b.until(lambda w: w.sequence_unlocked, limit=6)
-    b.go(1890)
-    b.kill('witch')
-    b.go(1980)
-    b.up()
-    b.up()
-    b.go(300)
-    b.up()
-    b.go(650)       # 낭떠러지 앞에서 분신이 건너가며 빛 발판을 만들게 한다
+    b.go(1150)
+    for x in (1180, 1260, 1380):
+        b.hop(x)
+    assert b.w.sky_progress == 2, f'2번 스위치가 켜지지 않았습니다 {b}'
+    b.go(1000)
+    b.w.start_recording('magic_book')              # 1번 계단에 남은 땅을 2번 턱 너머로 옮긴다
+    b.carry(0, 1460, 146)
     b.rec()
-    b.go(1560)
+    b.w.start_recording('magic_book')
+    b.carry(1, 1540, 182)
     b.rec()
-    b.wait(0.4)     # 분신 바로 뒤를 따라간다
-    b.go(2100)
+    b.go(1150)
+    for x in (1180, 1260, 1380, 1460, 1540, 1640):
+        b.hop(x)
+    assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
+    b.go(2120)
 
 
 @solution(5)
@@ -646,14 +666,28 @@ def check_puzzles():
         w.step(Motion(-1))
     assert w.result == 'defeated' and not w.revealed, ('3·4층 구덩이에 떨어지지 않았습니다', w.player)
 
-    # 낭떠러지: 분신이 만든 빛 발판 없이 들어가면 떨어져 앞쪽으로 돌아온다.
+    # 하늘 땅: 보통 점프로는 스위치 턱에 못 오르고, 문은 1→2→3을 다 밟기 전엔 잠겨 있다.
     w = World(3)
-    bridge = w.stage.bridge
+    sky = w.stage.sky
     w.enemies = []
-    w.player.floor, w.player.x = bridge.floor, bridge.left - 30
-    for _ in range(round(2 / STEP)):
+    w.player.x = sky.switches[1][0]
+    for frame in range(60):
+        w.step(Motion(jump=frame == 0))
+    assert w.player.base == 0 and w.sky_progress == 0, '보통 점프로 스위치 턱에 올랐습니다'
+    for _ in range(round(4 / STEP)):
         w.step(Motion(1))
-    assert w.player.x < bridge.left and w.health < w.max_health, ('발판 없이 낭떠러지를 건넜습니다', w.player.x)
+    assert w.player.x < sky.door.x and w.result == 'playing', '스위치 없이 하늘 문을 지났습니다'
+    # 염력은 녹화 중인 마법책 분신 둘레에만 닿고, 다른 분신이나 본체로는 땅을 못 잡는다.
+    assert not w.sky_grab(*sky.blocks[0]), '마법책 분신 없이 하늘 땅을 잡았습니다'
+    w.player.x = 100
+    w.start_recording('magic_book')
+    assert not w.sky_grab(*sky.blocks[3]), '멀리 있는 하늘 땅을 잡았습니다'
+    w.cancel_recording()
+    # 순서가 틀리면 스위치와 옮긴 땅이 모두 처음으로 돌아간다.
+    w.sky_progress, w.sky_blocks[0] = 1, [300, 40]
+    w.player.x, w.player.base = sky.switches[2][0], sky.switches[2][1]
+    w.step(Motion())
+    assert w.sky_progress == 0 and w.sky_blocks[0] == list(sky.blocks[0]), '틀린 순서에 초기화되지 않았습니다'
 
     # 동시 발판: 본체 발판만 밟아서는 열리지 않는다.
     w = World(6)

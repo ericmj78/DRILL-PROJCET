@@ -88,6 +88,19 @@ class Switch:
 
 
 @dataclass(frozen=True)
+class SkyPuzzle:
+    """하늘 땅 퍼즐. 마법책 분신을 녹화하는 동안 마우스로 떠 있는 땅(blocks의 (x, 높이))을
+    분신 둘레 reach 안에서 끌어 옮긴다. 옮긴 땅은 그 자리에 남는다.
+    본체가 switches((x, 높이))를 1→2→3 순서로 밟으면 door가 열리고,
+    순서가 틀리면 스위치와 땅이 모두 처음 자리로 돌아간다."""
+    blocks: tuple[tuple[int, int], ...]
+    switches: tuple[tuple[int, int], ...]
+    door: Point
+    width: int = 100
+    reach: int = 340
+
+
+@dataclass(frozen=True)
 class Lens:
     """렌즈 건축물. 외눈 유령 분신의 레이더 원이 닿으면 그 층의 숨은 발판이 모두 드러난다."""
     floor: int
@@ -242,6 +255,7 @@ class Stage:
     reveal_seconds: float = 10.0  # 외눈 유령 분신이 사라진 뒤 숨은 발판이 보이는 시간
     switches: tuple[Switch, ...] = ()
     lens: Lens | None = None
+    sky: SkyPuzzle | None = None
 
 
 STAGES = (
@@ -337,20 +351,24 @@ STAGES = (
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
-        '04  반대편 발판',
-        '1→2→3 순서로 발판을 밟아 보안문을 여세요. 꼭대기 층 낭떠러지는 분신이 지나간 자리만 밟을 수 있습니다.',
-        4, Point(340, 0), Point(2100, 3),
-        elevators=(Stair(1980, 0), Stair(1980, 1), Stair(300, 2)),
-        bridge=EchoBridge(3, 700, 1500),
-        gates=(Gate('A', Point(160, 0), Point(900, 0)),),
+        '04  염력의 하늘 땅',
+        '마법책을 처치해 분신을 얻으세요. 마법책 분신을 녹화하는 동안 마우스로 하늘 땅을 끌어 길을 만들고, '
+        '1→2→3 스위치를 순서대로 밟으세요.',
+        # [1·2·3층 통합방] 바닥 위 하늘에 날개 달린 땅 4개가 떠 있다. 보통 점프(42)로는 스위치 턱에
+        # 못 오르므로 땅을 38씩 계단으로 쌓아야 한다. 땅이 모자라 스위치마다 길을 다시 만든다.
+        1, Point(120, 0), Point(2120, 0),
+        floor_height=800,
+        platforms=(Platform(0, 580, 660, 150, False), Platform(0, 1340, 1420, 110, False),
+                   Platform(0, 1600, 1680, 220, False)),
+        sky=SkyPuzzle(blocks=((500, 320), (760, 360), (960, 300), (1250, 360)),
+                      switches=((620, 150), (1380, 110), (1640, 220)),
+                      door=Point(2020, 0)),
         enemies=(
-            EnemySpawn('magic_book', Point(700, 0), (620, 780)),
-            EnemySpawn('potion_slime', Point(1120, 0), (1060, 1200)),
-            EnemySpawn('magic_armor', Point(1380, 0), (1320, 1440)),
-            EnemySpawn('witch', Point(2000, 0), (1940, 2060)),
+            EnemySpawn('magic_book', Point(380, 0), (320, 440)),
+            EnemySpawn('magic_armor', Point(1100, 0), (1040, 1160)),
+            EnemySpawn('potion_slime', Point(1850, 0), (1790, 1910)),
         ),
-        sequence=SequenceGate((Point(1460, 0), Point(1300, 0), Point(1620, 0)), Point(1850, 0)),
-        echo_seconds=MAX_RECORD_SECONDS,
+        echo_seconds=20,   # 땅을 멀리서 끌어오려면 10초로는 모자라다
     ),
     Stage(
         '05  아래층의 열쇠',
@@ -452,7 +470,7 @@ STAGES = (
 # One visible stage may contain multiple connected map sections.
 STAGE_GROUPS = ((0,), (1, 2), (3,), (4, 5), (6,), (7, 8))
 STAGE_TITLES = (
-    '01  잔향의 문', '02  사냥꾼과 간수', '03  반대편 발판',
+    '01  잔향의 문', '02  사냥꾼과 간수', '03  염력의 하늘 땅',
     '04  격리실과 대마녀', '05  두 번째 잔향', '06  마지막 잔향',
 )
 
