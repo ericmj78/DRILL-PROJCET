@@ -15,6 +15,9 @@ KINDS = frozenset(('crawler', 'watcher', 'tier_ghost'))
 GHOST_SCALE, GHOST_TINT, GHOST_ALPHA = 0.75, (190, 170, 255), 205
 HOVER = 4                      # 외눈 유령은 바닥에서 조금 떠 있다
 WINDUP, RECOVERY, STRIKE = 0.31, 0.65, 0.4   # world.py의 준비·회복 시간, 회복 중 물기 동작 길이
+# 거미는 PixelLab 시트(tools/monster_pixel/pixellab_spider.py)를 쓴다. 줄 순서는 같고 공격은 이빨 물기.
+# monster_sheets.json은 make_monsters.py가 다시 쓰므로 여기서 덮어쓴다.
+SPIDER = {'sheet': 'pixellab/spider', 'size': (160, 112), 'feet': 106, 'center': 90}
 
 
 def attack_frame(windup, recovery):
@@ -29,6 +32,7 @@ def attack_frame(windup, recovery):
 class MonsterSprite:
     def __init__(self, load):
         self.meta = json.loads((ASSET_ROOT / '몬스터_도트' / 'monster_sheets.json').read_text(encoding='utf-8'))
+        self.meta['crawler'] = SPIDER
         self.sheets = {(kind, echo): load(f'몬스터_도트/{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
 
@@ -66,11 +70,11 @@ class StageOneFolderMonsters(MonsterSprite):
 
     def __init__(self, load):
         self.meta = {
-            'crawler': {'size': (112, 84), 'feet': 76, 'center': 55},
+            'crawler': SPIDER,
             'watcher': {'size': (96, 124), 'feet': 113, 'center': 47},
         }
         self.sheets = {
-            ('crawler', False): load('몬스터_도트/folder_spider.png'),
+            ('crawler', False): load(f'몬스터_도트/{SPIDER["sheet"]}.png'),
             ('watcher', False): load('몬스터_도트/folder_watcher.png'),
         }
         for image in self.sheets.values():

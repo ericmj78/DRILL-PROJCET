@@ -18,6 +18,7 @@ from make_monsters import echo  # noqa: E402
 OUT = HERE.parents[1] / 'assets' / '몬스터_도트' / 'pixellab'
 W, H = 160, 112            # 한 칸. 물기 때 앞(왼쪽)으로 뻗고 몸을 드니 왼쪽·위를 넉넉히
 FEET, LEFT = 106, 40       # 기본 자세의 발밑 줄, 몸 왼쪽 끝
+SKY = 40                   # 이 줄 위로는 거미가 없다
 ROWS = (                   # 줄 순서는 monster_sprite.py와 같다: 걷기, 공격, 대기 / (이름, 칸 수, 시드, 동작)
     ('walk', 8, 0, 'spider crawling forward to the left, eight legs stepping in alternating tetrapod gait, body level, side view'),
     # 'fangs'를 강조하면 송곳니·다리가 거대해진다. 시드 5·15·25·41·42·44는 다리가 자라거나 몸이 돌아갔다.
@@ -78,7 +79,10 @@ if __name__ == '__main__':
         frames = animate(base, name, count, action, seed)
         frames = frames[1:] if name == 'attack' else frames[:count]   # 공격은 기본 자세 칸을 빼고 바로 준비부터
         for column, frame in enumerate(frames[:count]):
-            sheet.paste(drop_specks(to_palette(frame, palette), keep=30), (column * W, row * H))
+            frame = drop_specks(to_palette(frame, palette), keep=30)
+            # 거미는 어느 칸에서도 y 48 위로 올라가지 않는다. 그 위는 PixelLab이 만든 연기 같은 덩어리라 지운다.
+            frame.paste((0, 0, 0, 0), (0, 0, W, SKY))
+            sheet.paste(frame, (column * W, row * H))
         print(name, len(frames))
     sheet.save(OUT / 'spider.png')
     echo(sheet).save(OUT / 'spider_echo.png')
