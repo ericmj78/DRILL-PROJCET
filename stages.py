@@ -91,13 +91,22 @@ class Switch:
 class SkyPuzzle:
     """하늘 땅 퍼즐. 마법책 분신을 녹화하는 동안 마우스로 떠 있는 땅(blocks의 (x, 높이))을
     분신 둘레 reach 안에서 끌어 옮긴다. 옮긴 땅은 그 자리에 남는다.
-    본체가 switches((x, 높이))를 1→2→3 순서로 밟으면 door가 열리고,
+    본체가 switches((x, 높이))를 1→2→3 순서로 밟아야 출구가 열리고,
     순서가 틀리면 스위치와 땅이 모두 처음 자리로 돌아간다."""
     blocks: tuple[tuple[int, int], ...]
     switches: tuple[tuple[int, int], ...]
-    door: Point
     width: int = 100
     reach: int = 340
+
+
+SKY_STEP = 38   # 보통 점프(높이 42)로 오를 수 있는 한 단
+
+
+def sky_stairs(steps, even_x, odd_x):
+    """하늘맵 벽가의 고정 디딤돌. k단(높이 38×k)을 k가 짝수면 even_x, 홀수면 odd_x에 놓아 지그재그로 쌓는다.
+    steps에서 빠진 단은 마법책 분신이 하늘 땅으로 메워야 한다."""
+    return tuple(Platform(0, (odd_x if k % 2 else even_x) - 40, (odd_x if k % 2 else even_x) + 40,
+                          SKY_STEP * k, False) for k in steps)
 
 
 @dataclass(frozen=True)
@@ -354,21 +363,25 @@ STAGES = (
         '04  염력의 하늘 땅',
         '마법책을 처치해 분신을 얻으세요. 마법책 분신을 녹화하는 동안 마우스로 하늘 땅을 끌어 길을 만들고, '
         '1→2→3 스위치를 순서대로 밟으세요.',
-        # [1·2·3층 통합방] 바닥 위 하늘에 날개 달린 땅 4개가 떠 있다. 보통 점프(42)로는 스위치 턱에
-        # 못 오르므로 땅을 38씩 계단으로 쌓아야 한다. 땅이 모자라 스위치마다 길을 다시 만든다.
-        1, Point(120, 0), Point(2120, 0),
+        # [1·2·3층 통합방] 출구는 가운데 바닥에 있고 세 스위치를 순서대로 밟아야 열린다.
+        # 스위치는 벽가의 턱 위에 있다: 1번 왼쪽 중간(10단), 2번 오른쪽 아래(4단), 3번 오른쪽 위(19단).
+        # 턱까지 고정 디딤돌이 지그재그로 놓였지만 군데군데 단이 빠져 있어, 하늘 땅(5개)으로 메워야 오른다.
+        # 1번 3칸, 2번 2칸, 3번은 2번 계단 위로 3칸 더 비어 있어 1번 계단의 땅을 오른쪽 벽까지 날라 와야 한다.
+        1, Point(1000, 0), Point(1240, 0),
         floor_height=800,
-        platforms=(Platform(0, 580, 660, 150, False), Platform(0, 1340, 1420, 110, False),
-                   Platform(0, 1600, 1680, 220, False)),
-        sky=SkyPuzzle(blocks=((500, 320), (760, 360), (960, 300), (1250, 360)),
-                      switches=((620, 150), (1380, 110), (1640, 220)),
-                      door=Point(2020, 0)),
-        enemies=(
-            EnemySpawn('magic_book', Point(380, 0), (320, 440)),
-            EnemySpawn('magic_armor', Point(1100, 0), (1040, 1160)),
-            EnemySpawn('potion_slime', Point(1850, 0), (1790, 1910)),
+        platforms=(
+            sky_stairs((1, 3, 4, 6, 7, 9), 130, 230) + (Platform(0, 55, 175, SKY_STEP * 10, False),)
+            + sky_stairs((2, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18), 2110, 2010)
+            + (Platform(0, 2060, 2185, SKY_STEP * 4, False), Platform(0, 2060, 2185, SKY_STEP * 19, False))
         ),
-        echo_seconds=20,   # 땅을 멀리서 끌어오려면 10초로는 모자라다
+        sky=SkyPuzzle(blocks=((500, 300), (780, 330), (1100, 280), (1450, 330), (1750, 300)),
+                      switches=((110, SKY_STEP * 10), (2130, SKY_STEP * 4), (2130, SKY_STEP * 19))),
+        enemies=(
+            EnemySpawn('magic_book', Point(700, 0), (620, 780)),
+            EnemySpawn('potion_slime', Point(450, 0), (390, 510)),
+            EnemySpawn('magic_armor', Point(1600, 0), (1540, 1660)),
+        ),
+        echo_seconds=30,   # 땅을 반대쪽 벽까지 날라 디딤돌을 오르려면 시간이 더 든다
     ),
     Stage(
         '05  아래층의 열쇠',

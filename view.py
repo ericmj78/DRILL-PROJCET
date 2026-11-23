@@ -632,7 +632,7 @@ class View:
         canvas.SDL_RenderGeometry(canvas.renderer, None, vertices, len(points), None, 0)
 
     def _draw_sky_puzzle(self, world):
-        """하늘 땅 퍼즐: 염력 범위, 날개 달린 땅, 1·2·3 스위치, 하늘 문."""
+        """하늘 땅 퍼즐: 염력 범위, 날개 달린 땅, 1·2·3 스위치. 출구 잠금은 출구 그림에서 그린다."""
         sky, floor_y, time = world.stage.sky, self.floor_y[0], world.time
         book = world._sky_book()
         if book is not None:
@@ -667,10 +667,6 @@ class View:
             x, y = sx - self.camera_x, floor_y + height
             draw_grounded(self.lever_art, LEVER_FRAMES[on], x, y, 34)
             self.heading.draw(x - 7, y + 52, str(index + 1), CYAN if on else GOLD)
-        opened = world.sky_progress == len(sky.switches)
-        dx = sky.door.x - self.camera_x
-        draw_grounded(self.gate_art, GATE_FRAMES[opened], dx, floor_y, 112)
-        self.small.draw(dx - 22, floor_y + 124, '열린 문' if opened else '하늘 문', CYAN if opened else GOLD)
 
     def _disc(self, x, y, radius, color, sides=14):
         points, colors = [], []
@@ -1078,11 +1074,15 @@ class View:
             frame = int(world.time * 8) % 6
             self.pixel_sprites.blit(self.pixel_sprites.prop(('exit', frame), lambda: pixel_sprites.draw_exit(frame)),
                                     x, y, 1)
+        elif stage.sky and world.sky_progress < len(stage.sky.switches):
+            draw_grounded(self.gate_art, GATE_FRAMES[0], x, y, 112)   # 세 스위치를 밟기 전엔 닫힌 문
         else:
             draw_grounded(self.exit_art, EXIT_FRAME, x, y, 105)
         locked = any(enemy.spawn.kind in BOSS_KINDS for enemy in world.enemies)
-        self.small.draw(x - 35 if locked else x - 15, y + 116,
-                        '보스 처치 필요' if locked else '출구', RED if locked else CYAN)
+        sky_locked = stage.sky and world.sky_progress < len(stage.sky.switches)
+        self.small.draw(x - 35 if locked or sky_locked else x - 15, y + 116,
+                        '보스 처치 필요' if locked else '1→2→3 스위치' if sky_locked else '출구',
+                        RED if locked or sky_locked else CYAN)
 
     def _draw_jailer_chain(self, actor, floor_y, phase, tint, size):
         # Source rectangles and foot anchors keep the boss fixed as the chain extends.

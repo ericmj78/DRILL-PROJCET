@@ -482,6 +482,10 @@ class World:
             if any(enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies):
                 if self.message_time <= 0:
                     self.notify('보스를 처치하면 출구가 열립니다.')
+            elif self.stage.sky and self.sky_progress < len(self.stage.sky.switches):
+                # 벽 문은 높이 125 위로 넘을 수 있어 하늘 땅 계단으로 넘지 못하게 출구 자체를 잠근다.
+                if self.message_time <= 0:
+                    self.notify('1→2→3 스위치를 순서대로 밟아야 출구가 열립니다.')
             else:
                 self.result = 'cleared'
 
@@ -573,9 +577,6 @@ class World:
         for switch, on in zip(self.stage.switches, self.switched):
             if not on and switch.door.floor == floor:
                 yield switch.door.x
-        sky = self.stage.sky
-        if sky and self.sky_progress < len(sky.switches) and sky.door.floor == floor:
-            yield sky.door.x
 
     def _spider_surfaces(self, floor):
         # 충돌 가능한 문과 벽만 사용한다. 경비 몬스터와 배경 무늬는 제외한다.

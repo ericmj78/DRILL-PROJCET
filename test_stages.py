@@ -84,13 +84,19 @@ class Bot:
             gap = x - self.me.x
             self.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
 
-    def carry(self, index, x, height):
-        """마법책 분신: index번 하늘 땅 아래로 가서 마우스로 잡고 (x, 높이)로 끌어다 놓는다."""
+    def carry(self, index, x, height, climb=()):
+        """마법책 분신: index번 하늘 땅 아래로 가서 마우스로 잡고 (x, 높이)로 끌어다 놓는다.
+        climb이 있으면 땅을 쥔 채 그 x들을 차례로 뛰어올라 염력이 닿는 높이까지 간다."""
         self.go(self.w.sky_blocks[index][0])
         bx, bh = self.w.sky_blocks[index]
         assert self.w.sky_grab(bx, bh), f'하늘 땅을 잡지 못했습니다 {self}'
         self.w.sky_drag(x, height)
-        self.go(x)
+        if climb:
+            self.go(climb[0] - 110)
+            for step in climb:
+                self.hop(step)
+        else:
+            self.go(x)
         self.w.sky_release()
         assert self.w.sky_blocks[index] == [x, height], f'하늘 땅이 제자리에 놓이지 않았습니다 {self}'
 
@@ -368,41 +374,56 @@ def stage_3(b):
 
 @solution(4)
 def stage_4(b):
-    # 하늘 땅은 4개뿐이다. 땅을 38씩 계단으로 쌓아 1번(높이 150) → 2번(110) → 3번(220) 턱에 오른다.
+    # 벽가의 고정 디딤돌(한 단 38)을 지그재그로 오른다. 빠진 단은 하늘 땅(5개)으로 메운다.
+    # 1번 왼쪽 벽 10단: 2·5·8단, 2번 오른쪽 벽 4단: 1·3단, 3번 오른쪽 벽 19단: 2번 계단 + 8·12·16단.
+    left = (230, 130) * 4 + (230, 110)             # 1~9단, 1번 턱
+    right = (2010, 2110, 2010, 2130)               # 1~3단, 2번 턱
+    top = right + (2010, 2110) * 7 + (2130,)       # 5~18단, 3번 턱
+
+    def book():                                    # 착지한 뒤 C → 마법책 분신
+        b.until(lambda w: w.player.base == 0 and w.player.fall_speed == 0)
+        b.w.start_recording('magic_book')
+        assert b.w.recording, f'녹화를 시작하지 못했습니다 {b}'
+
     b.kill('magic_book')
-    b.kill('magic_armor')
     b.kill('potion_slime')
-    b.go(450)
-    b.w.start_recording('magic_book')              # C → 마법책 분신
-    b.carry(0, 360, 38)
-    b.carry(1, 440, 76)
-    b.carry(2, 520, 114)
+    b.kill('magic_armor')
+    b.go(600)
+    book()
+    b.carry(0, 130, 76)
+    b.carry(1, 230, 190)
+    b.carry(2, 130, 304)
     b.rec()
     b.go(330)
-    for x in (360, 440, 520, 620):                 # 계단을 올라 1번 스위치
+    for x in left:
         b.hop(x)
     assert b.w.sky_progress == 1, f'1번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1000)                                     # 턱에서 걸어 내려온다
-    b.w.start_recording('magic_book')
-    b.carry(3, 1260, 76)                           # 2번 턱 아래에 땅 두 개
-    b.carry(2, 1180, 38)
+    b.go(1700)                                     # 디딤돌을 타고 내려온다
+    book()
+    b.carry(3, 2010, 38)
+    b.carry(4, 2010, 114)
     b.rec()
-    b.go(1150)
-    for x in (1180, 1260, 1380):
+    b.go(1900)
+    for x in right:
         b.hop(x)
     assert b.w.sky_progress == 2, f'2번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1000)
-    b.w.start_recording('magic_book')              # 1번 계단에 남은 땅을 2번 턱 너머로 옮긴다
-    b.carry(0, 1460, 146)
+    b.go(1900)
+    # 땅이 모자라 1번 계단의 땅을 오른쪽 벽까지 날라 온다. 높은 단은 분신이 땅을 쥔 채 디딤돌을 올라가 놓는다.
+    book()
+    b.carry(2, 2110, 304)
     b.rec()
-    b.w.start_recording('magic_book')
-    b.carry(1, 1540, 182)
+    book()
+    b.carry(1, 2110, 456, climb=right)
     b.rec()
-    b.go(1150)
-    for x in (1180, 1260, 1380, 1460, 1540, 1640):
+    b.go(1900)
+    book()
+    b.carry(0, 2110, 608, climb=right + (2010, 2110, 2010))
+    b.rec()
+    b.go(1900)
+    for x in top:
         b.hop(x)
     assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
-    b.go(2120)
+    b.go(1240)
 
 
 @solution(5)
@@ -666,17 +687,21 @@ def check_puzzles():
         w.step(Motion(-1))
     assert w.result == 'defeated' and not w.revealed, ('3·4층 구덩이에 떨어지지 않았습니다', w.player)
 
-    # 하늘 땅: 보통 점프로는 스위치 턱에 못 오르고, 문은 1→2→3을 다 밟기 전엔 잠겨 있다.
+    # 하늘 땅: 빠진 단이 있어 디딤돌만으로는 스위치 턱에 못 오르고, 출구는 1→2→3을 다 밟기 전엔 잠겨 있다.
     w = World(3)
     sky = w.stage.sky
     w.enemies = []
-    w.player.x = sky.switches[1][0]
-    for frame in range(60):
-        w.step(Motion(jump=frame == 0))
-    assert w.player.base == 0 and w.sky_progress == 0, '보통 점프로 스위치 턱에 올랐습니다'
-    for _ in range(round(4 / STEP)):
-        w.step(Motion(1))
-    assert w.player.x < sky.door.x and w.result == 'playing', '스위치 없이 하늘 문을 지났습니다'
+    for start, hops in ((300, (230, 130)), (1900, (2010, 2110))):
+        w.player.x, w.player.base = start, 0
+        for x in hops:
+            w.step(Motion(1 if x > w.player.x else -1, jump=True))
+            for _ in range(60):
+                w.step(Motion(1 if x > w.player.x + 3 else -1 if x < w.player.x - 3 else 0))
+        assert w.player.base <= 38 and w.sky_progress == 0, ('빠진 단을 뛰어 올랐습니다', w.player)
+    w.player.x, w.player.base = w.stage.exit.x, 0
+    for _ in range(10):
+        w.step(Motion())
+    assert w.result == 'playing', '스위치 없이 출구로 나갔습니다'
     # 염력은 녹화 중인 마법책 분신 둘레에만 닿고, 다른 분신이나 본체로는 땅을 못 잡는다.
     assert not w.sky_grab(*sky.blocks[0]), '마법책 분신 없이 하늘 땅을 잡았습니다'
     w.player.x = 100
