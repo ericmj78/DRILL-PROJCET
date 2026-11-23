@@ -1,27 +1,28 @@
-"""도트 몬스터(거미, 외눈 유령) 시트를 그린다. 시트는 tools/monster_pixel/make_monsters.py로 만든다.
+"""도트 몬스터(거미, 외눈 유령, 마법책, 물약 슬라임) 시트를 그린다. 시트는 PixelLab으로 만든다 (assets/PixelLab/몬스터).
 
 원본 그림은 왼쪽을 보므로 오른쪽을 볼 때 뒤집는다. 그림 한 칸 = 화면 1px.
 떠도는 유령은 외눈 유령 시트를 작게, 보랏빛 반투명으로 그린다.
 """
-import json
 
 from pico2d import pico2d as canvas
 import sdl2
 
 from animation import draw_region
-from asset_paths import ASSET_ROOT
 
 KINDS = frozenset(('crawler', 'watcher', 'tier_ghost'))
 GHOST_SCALE, GHOST_TINT, GHOST_ALPHA = 0.75, (190, 170, 255), 205
 HOVER = {'watcher': 4, 'magic_book': 6}   # 바닥에서 조금 떠 있는 몬스터
 WINDUP, RECOVERY, STRIKE = 0.31, 0.65, 0.4   # world.py의 준비·회복 시간, 회복 중 물기 동작 길이
-# 거미·외눈 유령은 PixelLab 시트(tools/monster_pixel/pixellab_spider.py, pixellab_watcher.py)를 쓴다.
-# 줄 순서는 같다. 거미 공격은 이빨 물기, 유령 떠다니기는 위아래로 둥실둥실.
-# monster_sheets.json은 make_monsters.py가 다시 쓰므로 여기서 덮어쓴다.
-SPIDER = {'sheet': 'pixellab/spider', 'size': (192, 112), 'feet': 106, 'center': 110}
-WATCHER = {'sheet': 'pixellab/watcher', 'size': (112, 136), 'feet': 124, 'center': 56}
+# 모든 몬스터 시트는 PixelLab으로 만들어 assets/PixelLab/몬스터에 따로 둔다 (tools/monster_pixel/pixellab_*.py).
+# 거미 공격은 이빨 물기, 유령 떠다니기는 위아래로 둥실둥실.
+SPIDER = {'sheet': 'PixelLab/몬스터/spider', 'size': (192, 112), 'feet': 106, 'center': 110}
+WATCHER = {'sheet': 'PixelLab/몬스터/watcher', 'size': (112, 136), 'feet': 124, 'center': 56}
 # 마법책(pixellab_book.py): 떠다니기 16칸, 공격 8칸(발톱을 치켜들었다가 책을 닫으며 할퀸다). 어느 스테이지에서나 쓴다.
-BOOK = {'sheet': 'pixellab/book', 'size': (160, 128), 'feet': 120, 'center': 86}
+BOOK = {'sheet': 'PixelLab/몬스터/book', 'size': (160, 128), 'feet': 120, 'center': 86}
+# 물약 슬라임(pixellab_slime.py): 걷기 8, 공격 8(몸을 늘였다가 내리쳐 물약이 튄다), 대기 4. 줄 순서는 거미와 같다.
+SLIME = {'sheet': 'PixelLab/몬스터/slime', 'size': (160, 128), 'feet': 122, 'center': 86}
+WALKERS = frozenset(('crawler', 'potion_slime'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
+ANYWHERE = frozenset(('magic_book', 'potion_slime'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
 
 
 def attack_frame(windup, recovery):
@@ -35,9 +36,8 @@ def attack_frame(windup, recovery):
 
 class MonsterSprite:
     def __init__(self, load):
-        self.meta = json.loads((ASSET_ROOT / '몬스터_도트' / 'monster_sheets.json').read_text(encoding='utf-8'))
-        self.meta['crawler'], self.meta['watcher'], self.meta['magic_book'] = SPIDER, WATCHER, BOOK
-        self.sheets = {(kind, echo): load(f'몬스터_도트/{info["sheet"]}{"_echo" if echo else ""}.png')
+        self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME)
+        self.sheets = {(kind, echo): load(f'{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
 
     def draw(self, kind, actor, floor_y, time, windup=0.0, recovery=0.0, opacity=255,
@@ -49,7 +49,7 @@ class MonsterSprite:
         frame = attack_frame(windup, recovery)
         if frame is not None:
             row, column = 1, frame
-        elif base == 'crawler':
+        elif base in WALKERS:
             row, column = (0, int(actor.walk_distance / 10) % 8) if actor.moving else (2, int(time * 3) % 4)
         else:   # 떠다니기. 여러 마리가 같은 박자로 흔들리지 않게 위치로 어긋나게 한다.
             row, column = 0, int(time * 8 + actor.x * 0.05) % 16
@@ -78,8 +78,8 @@ class StageOneFolderMonsters(MonsterSprite):
             'watcher': WATCHER,
         }
         self.sheets = {
-            ('crawler', False): load(f'몬스터_도트/{SPIDER["sheet"]}.png'),
-            ('watcher', False): load(f'몬스터_도트/{WATCHER["sheet"]}.png'),
+            ('crawler', False): load(f'{SPIDER["sheet"]}.png'),
+            ('watcher', False): load(f'{WATCHER["sheet"]}.png'),
         }
         for image in self.sheets.values():
             sdl2.SDL_SetTextureScaleMode(image.texture, sdl2.SDL_ScaleModeNearest)

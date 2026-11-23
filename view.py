@@ -32,6 +32,9 @@ from world import JUMP_DURATION, LIGHT_BELOW, SPIDER_AIM_REACH, WATCH_RANGE
 
 
 WIDTH, HEIGHT = 1120, 720
+# 물약 슬라임이 이만큼 움직일 때마다 자국을 남기고, 자국은 이만큼 뒤 사라진다 (마지막 40% 동안 흐려진다).
+# 슬라임이 느리고 몸에 가려지니 수명을 넉넉히 둔다.
+PUDDLE_GAP, PUDDLE_SECONDS = 34, 8.0
 INK = (7, 14, 27)
 PANEL = (13, 26, 44)
 LINE = (52, 76, 101)
@@ -138,6 +141,8 @@ class View:
         stage_font = font_dir / 'Hancom Gothic Bold.ttf'
         self.stage_title = load_font(str(stage_font if stage_font.exists() else bold if bold.exists() else fallback), 38)
         self.current_world = None
+        self.slime_puddle = load_asset('PixelLab/몬스터/slime_puddle.png')
+        self.slime_trail, self.slime_last = [], {}   # 물약 자국 (x, 층, 생긴 시각), 슬라임별 마지막 자국 x
         self.free_camera = False
         self.free_camera_x = 0.0
         self.camera_x = 0.0
@@ -353,6 +358,7 @@ class View:
             return
         if world is not self.current_world:
             self.current_world = world
+            self.slime_trail, self.slime_last = [], {}
             self.stage_started_at = perf_counter()
             self.camera_y = 0.0
             self.camera_updated_at = perf_counter()
@@ -1122,8 +1128,26 @@ class View:
                     width * scale, height * scale, flipped)
         canvas.SDL_SetTextureColorMod(self.jailer_chain_slam.texture, 255, 255, 255)
 
+    def _draw_slime_trail(self, world):
+        """물약 슬라임이 지나간 자리에 물약 자국을 남긴다. 자국은 PUDDLE_SECONDS 동안 옅어지며 사라진다."""
+        for enemy in world.enemies:
+            if enemy.spawn.kind == 'potion_slime' and enemy.actor.moving:
+                last = self.slime_last.get(id(enemy))
+                if last is None or abs(enemy.actor.x - last) >= PUDDLE_GAP:
+                    self.slime_last[id(enemy)] = enemy.actor.x
+                    self.slime_trail.append((enemy.actor.x, enemy.actor.floor, world.time))
+        self.slime_trail = [p for p in self.slime_trail if world.time - p[2] < PUDDLE_SECONDS]
+        image = self.slime_puddle
+        for x, floor, born in self.slime_trail:
+            left = 1 - (world.time - born) / PUDDLE_SECONDS
+            canvas.SDL_SetTextureAlphaMod(image.texture, round(255 * min(1.0, left / 0.4)))
+            draw_region(image, (0, 0, image.w, image.h), x - self.camera_x - image.w / 2,
+                        self.floor_y[floor] - 7, image.w, image.h)   # 바닥 위에 살짝 묻히게
+        canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+
     def _draw_characters(self, world):
         recording = world.recording
+        self._draw_slime_trail(world)
         if world.echo is not None:
             self._draw_selected_echo(world.echo.actor, world.echo.monster_kind, 145 if recording else 228)
         for enemy in world.enemies:
@@ -1141,8 +1165,8 @@ class View:
             if world.index == 0 and enemy.spawn.kind in monster_sprite.KINDS:
                 self.stage1_folder_monsters.draw(enemy.spawn.kind, screen_enemy.actor, y, world.time,
                                                 enemy.windup, enemy.recovery, tint=tint)
-            elif enemy.spawn.kind == 'magic_book':   # PixelLab 시트: 떠다니기·공격이 시트 안에 있다
-                self.monster_sprite.draw('magic_book', screen_enemy.actor, y, world.time,
+            elif enemy.spawn.kind in monster_sprite.ANYWHERE:   # PixelLab 시트: 이동·공격이 시트 안에 있다
+                self.monster_sprite.draw(enemy.spawn.kind, screen_enemy.actor, y, world.time,
                                          enemy.windup, enemy.recovery, tint=tint)
             elif enemy.spawn.kind == 'echo_knight':
                 self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
@@ -1174,16 +1198,6 @@ class View:
                 draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
             elif enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
-            elif enemy.spawn.kind in ('magic_book', 'potion_slime'):
-                image = self.enemies[enemy.spawn.kind]
-                bob = 5 + sin(world.time * 3) * 4 if enemy.spawn.kind == 'magic_book' else 0
-                squash = 1 + 0.07 * sin(world.time * 7) if enemy.spawn.kind == 'potion_slime' else 1
-                height = kind.size * squash
-                width = kind.size * image.w / image.h / squash
-                canvas.SDL_SetTextureColorMod(image.texture, *tint)
-                draw_region(image, (0, 0, image.w, image.h), x - width / 2, y + bob, width, height,
-                            enemy.actor.facing != -1)
-                canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
             elif enemy.actor.moving and enemy.spawn.kind in self.enemy_walk:
                 self.enemy_walk[enemy.spawn.kind].draw(
                     screen_enemy.actor, y, faces=-1, tint=tint,
@@ -1315,7 +1329,7 @@ class View:
                 line(actor.x + (tx - actor.x) * a, floor + 34 + (ty - floor - 34) * a,
                      actor.x + (tx - actor.x) * b, floor + 34 + (ty - floor - 34) * b, color)
             box(tx - 4, ty - 4, tx + 4, ty + 4, color)
-        if pixel and monster_kind in monster_sprite.KINDS or monster_kind == 'magic_book':
+        if pixel and monster_kind in monster_sprite.KINDS or monster_kind in monster_sprite.ANYWHERE:
             self.monster_sprite.draw(monster_kind, actor, floor, self.animation_time,
                                      opacity=opacity, echo=True)
             return

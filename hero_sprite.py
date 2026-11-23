@@ -4,7 +4,7 @@ assets/주인공_도트/hero_w{무기}.png: 한 칸 160 × 160, 그림 한 칸 =
 줄 순서는 대기 24, 걷기 8, 점프 8, 베기 10, 찌르기 10. 발밑은 122줄, 몸 가운데는 71칸.
 걷기는 사용자가 그린 걷기 그림(hero_walk.png, tools/hero_pixel/make_walk.py)을 쓴다:
 한 칸 128 × 128, 발밑 124줄, 몸 가운데 66칸. 이 그림에는 무기가 없다.
-한손검(무기 2)과 분신은 PixelLab 시트(pixellab/hero_{동작}_sheet.png, tools/hero_pixel/pixellab_hero_anims.py)를 쓴다:
+한손검(무기 2)과 분신은 PixelLab 시트(PixelLab/주인공/hero_{동작}_sheet.png, tools/hero_pixel/pixellab_hero_anims.py)를 쓴다:
 동작마다 가로 9칸, 한 칸 160 × 160(찌르기만 224 × 160), 발밑 156줄, 몸 가운데 86칸.
 베기(A)는 attack 시트, 찌르기(S)는 thrust 시트.
 """
@@ -27,8 +27,8 @@ class HeroSprite:
     def __init__(self, load):
         self.sheets = [load(f'주인공_도트/hero_w{index}.png') for index in range(5)]
         self.walk = load('주인공_도트/hero_walk.png')
-        self.sword = {name: load(f'주인공_도트/pixellab/hero_{name}_sheet.png') for name in SWORD_SHEETS}
-        self.sword_echo = {name: load(f'주인공_도트/pixellab/hero_{name}_echo.png') for name in SWORD_SHEETS}
+        self.sword = {name: load(f'PixelLab/주인공/hero_{name}_sheet.png') for name in SWORD_SHEETS}
+        self.sword_echo = {name: load(f'PixelLab/주인공/hero_{name}_echo.png') for name in SWORD_SHEETS}
 
     def draw(self, actor, floor_y, weapon_index, opacity, time, attack=None, echo=False):
         """attack: (종류, 진행도) 또는 None. echo면 은빛 분신 시트(한손검)를 쓴다."""

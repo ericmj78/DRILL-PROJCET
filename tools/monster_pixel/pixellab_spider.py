@@ -5,7 +5,7 @@
 3) animate-pixminimax: 걷기·물기·대기 (마지막 칸을 기본 자세로 고정)
 사용: python tools/monster_pixel/pixellab_spider.py [원본 일러스트.png]
   원본을 주면 기본 도트(spider_base.png)부터 새로 만들고, 없으면 있는 기본 도트로 동작만 만든다.
-결과: assets/몬스터_도트/pixellab/spider.png, spider_echo.png (한 칸 192 × 112, 왼쪽을 봄)
+결과: assets/PixelLab/몬스터/spider.png, spider_echo.png (한 칸 192 × 112, 왼쪽을 봄)
 필요: 환경변수 PIXELLAB_TOKEN
 """
 import sys
@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE.parent / 'hero_pixel'))
 from pixellab_hero_anims import b64, call, unb64, animate, to_palette, drop_specks  # noqa: E402,F401
 from make_monsters import echo  # noqa: E402
 
-OUT = HERE.parents[1] / 'assets' / '몬스터_도트' / 'pixellab'
+OUT = HERE.parents[1] / 'assets' / 'PixelLab' / '몬스터'
 W, H = 192, 112            # 한 칸. 물기 때 앞(왼쪽)으로 덮치니 왼쪽을 넉넉히
 FEET, LEFT = 106, 50       # 기본 자세의 발밑 줄, 몸 왼쪽 끝
 WIDTH = 120                # 거미 몸 폭

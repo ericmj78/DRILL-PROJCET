@@ -5,7 +5,7 @@
 3) animate-pixminimax: 떠다니기·공격 (마지막 칸을 기본 자세로 고정)
 사용: python tools/monster_pixel/pixellab_book.py [원본 일러스트.png]
   원본을 주면 기본 도트(book_base.png)부터 새로 만들고, 없으면 있는 기본 도트로 동작만 만든다.
-결과: assets/몬스터_도트/pixellab/book.png, book_echo.png (한 칸 160 × 128, 앞을 봄. 덮치는 쪽은 왼쪽)
+결과: assets/PixelLab/몬스터/book.png, book_echo.png (한 칸 160 × 128, 앞을 봄. 덮치는 쪽은 왼쪽)
 필요: 환경변수 PIXELLAB_TOKEN
 """
 import sys

@@ -2,7 +2,7 @@
 
 사용: python tools/monster_pixel/pixellab_watcher.py [원본 일러스트.png]
   원본을 주면 기본 도트(watcher_base.png)부터 새로 만들고, 없으면 있는 기본 도트로 동작만 만든다.
-결과: assets/몬스터_도트/pixellab/watcher.png, watcher_echo.png (한 칸 112 × 136, 왼쪽을 봄)
+결과: assets/PixelLab/몬스터/watcher.png, watcher_echo.png (한 칸 112 × 136, 왼쪽을 봄)
 필요: 환경변수 PIXELLAB_TOKEN
 """
 import sys

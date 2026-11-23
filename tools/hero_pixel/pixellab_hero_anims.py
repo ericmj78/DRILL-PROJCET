@@ -1,6 +1,6 @@
 """PixelLab API로 주인공 대기/걷기/공격/점프 스트립 시트를 만든다.
 
-사용: python tools/hero_pixel/pixellab_hero_anims.py assets/주인공_도트/pixellab/hero_ref.png [--skip-base]
+사용: python tools/hero_pixel/pixellab_hero_anims.py assets/PixelLab/주인공/hero_ref.png [--skip-base]
 원본은 칼 없는 128×128 도트 그림. 칼은 add_sword.py가 찍고, 결과 색은 그 팔레트로 맞춘다.
 필요: 환경변수 PIXELLAB_TOKEN
 """
@@ -13,7 +13,7 @@ from make_hero import echo
 
 API = "https://api.pixellab.ai/v2"
 TOKEN = os.environ["PIXELLAB_TOKEN"]
-OUT = Path(__file__).resolve().parents[2] / "assets" / "주인공_도트" / "pixellab"
+OUT = Path(__file__).resolve().parents[2] / "assets" / "PixelLab" / "주인공"
 FRAME = 128   # 원본 도트 그림 크기
 CANVAS = 160  # 시트 프레임 크기: 점프/공격 때 잘리지 않게 위·좌우 여백
 
