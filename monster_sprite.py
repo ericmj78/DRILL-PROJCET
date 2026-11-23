@@ -18,7 +18,7 @@ WINDUP, RECOVERY, STRIKE = 0.31, 0.65, 0.4   # world.py의 준비·회복 시간
 # 거미·외눈 유령은 PixelLab 시트(tools/monster_pixel/pixellab_spider.py, pixellab_watcher.py)를 쓴다.
 # 줄 순서는 같다. 거미 공격은 이빨 물기, 유령 떠다니기는 위아래로 둥실둥실.
 # monster_sheets.json은 make_monsters.py가 다시 쓰므로 여기서 덮어쓴다.
-SPIDER = {'sheet': 'pixellab/spider', 'size': (160, 112), 'feet': 106, 'center': 90}
+SPIDER = {'sheet': 'pixellab/spider', 'size': (192, 112), 'feet': 106, 'center': 110}
 WATCHER = {'sheet': 'pixellab/watcher', 'size': (112, 136), 'feet': 124, 'center': 56}
 
 
