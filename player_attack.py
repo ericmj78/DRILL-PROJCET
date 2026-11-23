@@ -25,10 +25,11 @@ THRUST = (
 )
 # 잔상을 남기는 구간과 간격(진행도)
 TRAIL_FROM, TRAIL_TO, TRAIL_STEP = 0.28, 0.72, 0.045
-# 이펙트: 시트, 타격 순간의 재생 위치(초), 손·발 기준 앞쪽 거리, 높이, 무기 길이 99 기준 배율
+# 이펙트: 시트, 타격 순간의 재생 위치(초), 손·발 기준 앞쪽 거리, 높이, 무기 길이 99 기준 배율, 물들일 색
+# 배율이 클수록 픽셀도 굵어진다. 시트는 몬스터와 같이 쓰므로 색은 그림 파일이 아니라 그릴 때 입힌다.
 EFFECTS = {
-    'slash': ('sword-slash', 0.07, 4, 22, 0.95),
-    'thrust': ('thrust', 0.07, 16, 50, 1.15),
+    'slash': ('sword-slash', 0.07, 4, 22, 1.5, (190, 90, 255)),   # 보라
+    'thrust': ('thrust', 0.07, 16, 50, 1.7, (255, 50, 45)),       # 빨강
 }
 HIT_SPARK = ('hit-spark', 26, 1.0)  # 시트, 맞은 적의 바닥 위 높이, 배율
 
@@ -79,10 +80,11 @@ def trail(progress: float):
 
 def draw_attack_effect(sheets, kind, age, duration, reach, x, floor_y, facing):
     """휘두른 자리에 남는 검기. age는 공격을 시작한 뒤 흐른 시간이다."""
-    name, lead, forward, lift, scale = EFFECTS[kind]
+    name, lead, forward, lift, scale, color = EFFECTS[kind]
     time = age - duration * HIT_AT + lead
     if time >= 0:
-        draw_sheet(sheets[name], time, x + facing * forward, floor_y + lift, facing, scale * reach / 99)
+        draw_sheet(sheets[name], time, x + facing * forward, floor_y + lift, facing, scale * reach / 99,
+                   color=color)
 
 
 def draw_hit_spark(sheets, age, x, floor_y, facing):

@@ -152,8 +152,9 @@ def load_attack_fx(folder: Path) -> dict:
     return sheets
 
 
-def draw_sheet(sheet, time, x, y, facing, scale=1, alpha=255):
-    """시트의 time초 프레임을 그린다. 시트는 오른쪽을 보고 있고 pivot이 (x, y)에 온다."""
+def draw_sheet(sheet, time, x, y, facing, scale=1, alpha=255, color=(255, 255, 255)):
+    """시트의 time초 프레임을 그린다. 시트는 오른쪽을 보고 있고 pivot이 (x, y)에 온다.
+    color를 주면 그 색을 곱해 물들인다 (흰 픽셀이 그 색이 된다)."""
     image, meta = sheet
     frame = int(time * meta['fps'])
     if meta['loop']:
@@ -166,12 +167,14 @@ def draw_sheet(sheet, time, x, y, facing, scale=1, alpha=255):
     left = x - (pivot_x if facing > 0 else width - pivot_x) * scale
     top = canvas.get_canvas_height() - y - pivot_y * scale
     canvas.SDL_SetTextureAlphaMod(image.texture, alpha)
+    canvas.SDL_SetTextureColorMod(image.texture, *color)
     canvas.SDL_RenderCopyExF(
         canvas.renderer, image.texture, source,
         canvas.SDL_FRect(left, top, width * scale, height * scale), 0, None,
         canvas.SDL_FLIP_NONE if facing > 0 else canvas.SDL_FLIP_HORIZONTAL,
     )
     canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+    canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
 
 
 def draw_attack_effect(sheets: dict, kind: str, x, floor_y, facing, windup: float, recovery: float):

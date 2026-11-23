@@ -24,7 +24,7 @@ fx_meta = json.load(open('git_slashfx.json', encoding='utf-8'))['meta']['pixelfx
 
 def effect_layer(age, shift):
     """Same placement as player_attack.draw_attack_effect, in art px (y down)."""
-    name, lead, forward, lift, scale = pa.EFFECTS['slash']
+    name, lead, forward, lift, scale, _color = pa.EFFECTS['slash']
     t = age - DURATION * pa.HIT_AT + lead
     frame = int(t * fx_meta['fps'])
     if t < 0 or frame >= fx_meta['frames']:
