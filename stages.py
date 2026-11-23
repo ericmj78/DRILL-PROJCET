@@ -102,13 +102,6 @@ class SkyPuzzle:
 SKY_STEP = 38   # 보통 점프(높이 42)로 오를 수 있는 한 단
 
 
-def sky_stairs(steps, even_x, odd_x):
-    """하늘맵 벽가의 고정 디딤돌. k단(높이 38×k)을 k가 짝수면 even_x, 홀수면 odd_x에 놓아 지그재그로 쌓는다.
-    steps에서 빠진 단은 마법책 분신이 하늘 땅으로 메워야 한다."""
-    return tuple(Platform(0, (odd_x if k % 2 else even_x) - 40, (odd_x if k % 2 else even_x) + 40,
-                          SKY_STEP * k, False) for k in steps)
-
-
 @dataclass(frozen=True)
 class Lens:
     """렌즈 건축물. 외눈 유령 분신의 레이더 원이 닿으면 그 층의 숨은 발판이 모두 드러난다."""
@@ -364,18 +357,15 @@ STAGES = (
         '마법책을 처치해 분신을 얻으세요. 마법책 분신을 녹화하는 동안 마우스로 하늘 땅을 끌어 길을 만들고, '
         '1→2→3 스위치를 순서대로 밟으세요.',
         # [1·2·3층 통합방] 출구는 가운데 바닥에 있고 세 스위치를 순서대로 밟아야 열린다.
-        # 스위치는 벽가의 턱 위에 있다: 1번 왼쪽 중간(10단), 2번 오른쪽 아래(4단), 3번 오른쪽 위(19단).
-        # 턱까지 고정 디딤돌이 지그재그로 놓였지만 군데군데 단이 빠져 있어, 하늘 땅(5개)으로 메워야 오른다.
-        # 1번 3칸, 2번 2칸, 3번은 2번 계단 위로 3칸 더 비어 있어 1번 계단의 땅을 오른쪽 벽까지 날라 와야 한다.
+        # 스위치는 벽에 붙은 작은 턱 위에 있다: 1번 왼쪽 중간(10단), 2번 오른쪽 아래(4단), 3번 오른쪽 위(17단).
+        # 턱까지 가는 길은 없다. 하늘 섬 15개를 한 단(38)씩 계단으로 쌓아야 오른다.
+        # 1번 9개, 2번 3개, 3번은 2번 계단 위로 12개 더 들어 섬 15개를 다 써야 해서 1번 계단의 섬을 날라 와야 한다.
         1, Point(1000, 0), Point(1240, 0),
         floor_height=800,
-        platforms=(
-            sky_stairs((1, 3, 4, 6, 7, 9), 130, 230) + (Platform(0, 55, 175, SKY_STEP * 10, False),)
-            + sky_stairs((2, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18), 2110, 2010)
-            + (Platform(0, 2060, 2185, SKY_STEP * 4, False), Platform(0, 2060, 2185, SKY_STEP * 19, False))
-        ),
-        sky=SkyPuzzle(blocks=((500, 300), (780, 330), (1100, 280), (1450, 330), (1750, 300)),
-                      switches=((110, SKY_STEP * 10), (2130, SKY_STEP * 4), (2130, SKY_STEP * 19))),
+        platforms=(Platform(0, 55, 175, SKY_STEP * 10, False), Platform(0, 2060, 2185, SKY_STEP * 4, False),
+                   Platform(0, 2060, 2185, SKY_STEP * 17, False)),
+        sky=SkyPuzzle(blocks=tuple((380 + 105 * i, (240, 320, 280, 210, 340)[i % 5]) for i in range(15)),
+                      switches=((110, SKY_STEP * 10), (2130, SKY_STEP * 4), (2130, SKY_STEP * 17))),
         enemies=(
             EnemySpawn('magic_book', Point(700, 0), (620, 780)),
             EnemySpawn('potion_slime', Point(450, 0), (390, 510)),

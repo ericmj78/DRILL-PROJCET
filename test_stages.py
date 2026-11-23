@@ -7,7 +7,7 @@ SOLUTIONS는 막혔을 때 읽는 공략집이기도 하다.
 import sys
 
 import boss_skills
-from stages import BOSS_KINDS, STAGES, STEP
+from stages import BOSS_KINDS, SKY_STEP, STAGES, STEP
 from world import Actor, Echo, Motion, World
 
 
@@ -374,54 +374,45 @@ def stage_3(b):
 
 @solution(4)
 def stage_4(b):
-    # 벽가의 고정 디딤돌(한 단 38)을 지그재그로 오른다. 빠진 단은 하늘 땅(5개)으로 메운다.
-    # 1번 왼쪽 벽 10단: 2·5·8단, 2번 오른쪽 벽 4단: 1·3단, 3번 오른쪽 벽 19단: 2번 계단 + 8·12·16단.
-    left = (230, 130) * 4 + (230, 110)             # 1~9단, 1번 턱
-    right = (2010, 2110, 2010, 2130)               # 1~3단, 2번 턱
-    top = right + (2010, 2110) * 7 + (2130,)       # 5~18단, 3번 턱
+    # 하늘 섬 15개를 한 단(38)씩 지그재그 계단으로 쌓는다. 1번 왼쪽 벽 10단(섬 9개),
+    # 2번 오른쪽 벽 4단(섬 3개), 3번 오른쪽 벽 17단(2번 계단 위로 섬 12개). 섬이 모자라 1번 계단의 섬을 날라 온다.
+    def left(k):                                   # 왼쪽 계단 k단의 x (10단은 1번 턱)
+        return 235 if k % 2 else 115
 
-    def book():                                    # 착지한 뒤 C → 마법책 분신
+    def right(k):                                  # 오른쪽 계단 k단의 x (4단은 2번 턱, 17단은 3번 턱)
+        return 2130 if k in (4, 17) else 2005 if k % 2 else 2125
+
+    def build(index, column, k):
+        """착지한 뒤 C → 마법책 분신으로 index번 섬을 column 계단 k단에 놓는다.
+        높은 단은 분신이 섬을 쥔 채 이미 쌓은 계단을 k-8단까지 올라가 염력이 닿게 한다."""
         b.until(lambda w: w.player.base == 0 and w.player.fall_speed == 0)
         b.w.start_recording('magic_book')
         assert b.w.recording, f'녹화를 시작하지 못했습니다 {b}'
+        b.carry(index, column(k), SKY_STEP * k, climb=tuple(column(j) for j in range(1, k - 7)))
+        b.rec()
 
     b.kill('magic_book')
     b.kill('potion_slime')
     b.kill('magic_armor')
     b.go(600)
-    book()
-    b.carry(0, 130, 76)
-    b.carry(1, 230, 190)
-    b.carry(2, 130, 304)
-    b.rec()
-    b.go(330)
-    for x in left:
-        b.hop(x)
+    for k in range(1, 10):
+        build(k - 1, left, k)                      # 왼쪽부터 섬 0~8번
+    b.go(345)
+    for k in range(1, 11):
+        b.hop(left(k))
     assert b.w.sky_progress == 1, f'1번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1700)                                     # 디딤돌을 타고 내려온다
-    book()
-    b.carry(3, 2010, 38)
-    b.carry(4, 2010, 114)
-    b.rec()
-    b.go(1900)
-    for x in right:
-        b.hop(x)
+    b.go(1895)                                     # 섬을 타고 내려온다
+    for k in (1, 2, 3):
+        build(8 + k, right, k)                     # 섬 9~11번
+    for k in range(1, 5):
+        b.hop(right(k))
     assert b.w.sky_progress == 2, f'2번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1900)
-    # 땅이 모자라 1번 계단의 땅을 오른쪽 벽까지 날라 온다. 높은 단은 분신이 땅을 쥔 채 디딤돌을 올라가 놓는다.
-    book()
-    b.carry(2, 2110, 304)
-    b.rec()
-    book()
-    b.carry(1, 2110, 456, climb=right)
-    b.rec()
-    b.go(1900)
-    book()
-    b.carry(0, 2110, 608, climb=right + (2010, 2110, 2010))
-    b.rec()
-    b.go(1900)
-    for x in top:
-        b.hop(x)
+    b.go(1895)
+    sources = (12, 13, 14) + tuple(range(8, -1, -1))   # 남은 섬 3개, 그다음 1번 계단의 섬을 위에서부터
+    for index, k in zip(sources, range(5, 17)):
+        build(index, right, k)
+    for k in range(1, 18):
+        b.hop(right(k))
     assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
     b.go(1240)
 
