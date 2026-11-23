@@ -374,13 +374,13 @@ def stage_3(b):
 
 @solution(4)
 def stage_4(b):
-    # 하늘 섬 15개를 한 단(38)씩 지그재그 계단으로 쌓는다. 1번 왼쪽 벽 10단(섬 9개),
-    # 2번 오른쪽 벽 4단(섬 3개), 3번 오른쪽 벽 17단(2번 계단 위로 섬 12개). 섬이 모자라 1번 계단의 섬을 날라 온다.
-    def left(k):                                   # 왼쪽 계단 k단의 x (10단은 1번 턱)
-        return 235 if k % 2 else 115
+    # 하늘 섬 7개를 한 단(38)씩 지그재그 계단으로 쌓는다. 1번 왼쪽 벽 5단(섬 4개), 2번 왼쪽 벽 맨 위
+    # 9단(1번 턱 위로 섬 3개), 3번 오른쪽 벽 8단(섬 7개). 섬이 모자라 왼쪽 계단을 통째로 오른쪽으로 옮긴다.
+    def left(k):                                   # 왼쪽 계단 k단의 x (5단은 1번 턱, 9단은 2번 턱)
+        return 235 if k % 2 and k not in (5, 9) else 115
 
-    def right(k):                                  # 오른쪽 계단 k단의 x (4단은 2번 턱, 17단은 3번 턱)
-        return 2130 if k in (4, 17) else 2005 if k % 2 else 2125
+    def right(k):                                  # 오른쪽 계단 k단의 x (8단은 3번 턱)
+        return 2130 if k == 8 else 2005 if k % 2 else 2125
 
     def build(index, column, k):
         """착지한 뒤 C → 마법책 분신으로 index번 섬을 column 계단 k단에 놓는다.
@@ -395,23 +395,19 @@ def stage_4(b):
     b.kill('potion_slime')
     b.kill('magic_armor')
     b.go(600)
-    for k in range(1, 10):
-        build(k - 1, left, k)                      # 왼쪽부터 섬 0~8번
+    for index, k in enumerate((1, 2, 3, 4, 6, 7, 8)):
+        build(index, left, k)                      # 왼쪽부터 섬 0~6번
     b.go(345)
-    for k in range(1, 11):
+    for k in range(1, 6):
         b.hop(left(k))
     assert b.w.sky_progress == 1, f'1번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1895)                                     # 섬을 타고 내려온다
-    for k in (1, 2, 3):
-        build(8 + k, right, k)                     # 섬 9~11번
-    for k in range(1, 5):
-        b.hop(right(k))
+    for k in range(6, 10):
+        b.hop(left(k))
     assert b.w.sky_progress == 2, f'2번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1895)
-    sources = (12, 13, 14) + tuple(range(8, -1, -1))   # 남은 섬 3개, 그다음 1번 계단의 섬을 위에서부터
-    for index, k in zip(sources, range(5, 17)):
-        build(index, right, k)
-    for k in range(1, 18):
+    b.go(1895)                                     # 섬을 타고 내려온다
+    for index, k in enumerate(range(1, 8)):
+        build(index, right, k)                     # 왼쪽 계단의 섬을 모두 오른쪽 벽으로
+    for k in range(1, 9):
         b.hop(right(k))
     assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
     b.go(1240)

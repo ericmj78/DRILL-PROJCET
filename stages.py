@@ -357,15 +357,15 @@ STAGES = (
         '마법책을 처치해 분신을 얻으세요. 마법책 분신을 녹화하는 동안 마우스로 하늘 땅을 끌어 길을 만들고, '
         '1→2→3 스위치를 순서대로 밟으세요.',
         # [1·2·3층 통합방] 출구는 가운데 바닥에 있고 세 스위치를 순서대로 밟아야 열린다.
-        # 스위치는 벽에 붙은 작은 턱 위에 있다: 1번 왼쪽 중간(10단), 2번 오른쪽 아래(4단), 3번 오른쪽 위(17단).
-        # 턱까지 가는 길은 없다. 하늘 섬 15개를 한 단(38)씩 계단으로 쌓아야 오른다.
-        # 1번 9개, 2번 3개, 3번은 2번 계단 위로 12개 더 들어 섬 15개를 다 써야 해서 1번 계단의 섬을 날라 와야 한다.
+        # 스위치는 벽에 붙은 작은 턱 위에 있다: 1번 왼쪽 중간(5단), 2번 왼쪽 맨 위(9단), 3번 오른쪽 위(8단).
+        # 턱까지 가는 길은 없다. 하늘 섬 7개를 한 단(38)씩 계단으로 쌓아야 오른다.
+        # 1번 4개, 2번은 1번 턱 위로 3개 더(7개 전부), 3번은 바닥부터 7개 전부라 왼쪽 계단을 통째로 옮겨 와야 한다.
         1, Point(1000, 0), Point(1240, 0),
         floor_height=800,
-        platforms=(Platform(0, 55, 175, SKY_STEP * 10, False), Platform(0, 2060, 2185, SKY_STEP * 4, False),
-                   Platform(0, 2060, 2185, SKY_STEP * 17, False)),
-        sky=SkyPuzzle(blocks=tuple((380 + 105 * i, (240, 320, 280, 210, 340)[i % 5]) for i in range(15)),
-                      switches=((110, SKY_STEP * 10), (2130, SKY_STEP * 4), (2130, SKY_STEP * 17))),
+        platforms=(Platform(0, 55, 175, SKY_STEP * 5, False), Platform(0, 55, 175, SKY_STEP * 9, False),
+                   Platform(0, 2060, 2185, SKY_STEP * 8, False)),
+        sky=SkyPuzzle(blocks=tuple((400 + 230 * i, (240, 320, 280, 210, 340, 260, 300)[i]) for i in range(7)),
+                      switches=((110, SKY_STEP * 5), (110, SKY_STEP * 9), (2130, SKY_STEP * 8))),
         enemies=(
             EnemySpawn('magic_book', Point(700, 0), (620, 780)),
             EnemySpawn('potion_slime', Point(450, 0), (390, 510)),
