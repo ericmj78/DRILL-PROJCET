@@ -13,13 +13,15 @@ from asset_paths import ASSET_ROOT
 
 KINDS = frozenset(('crawler', 'watcher', 'tier_ghost'))
 GHOST_SCALE, GHOST_TINT, GHOST_ALPHA = 0.75, (190, 170, 255), 205
-HOVER = 4                      # 외눈 유령은 바닥에서 조금 떠 있다
+HOVER = {'watcher': 4, 'magic_book': 6}   # 바닥에서 조금 떠 있는 몬스터
 WINDUP, RECOVERY, STRIKE = 0.31, 0.65, 0.4   # world.py의 준비·회복 시간, 회복 중 물기 동작 길이
 # 거미·외눈 유령은 PixelLab 시트(tools/monster_pixel/pixellab_spider.py, pixellab_watcher.py)를 쓴다.
 # 줄 순서는 같다. 거미 공격은 이빨 물기, 유령 떠다니기는 위아래로 둥실둥실.
 # monster_sheets.json은 make_monsters.py가 다시 쓰므로 여기서 덮어쓴다.
 SPIDER = {'sheet': 'pixellab/spider', 'size': (192, 112), 'feet': 106, 'center': 110}
 WATCHER = {'sheet': 'pixellab/watcher', 'size': (112, 136), 'feet': 124, 'center': 56}
+# 마법책(pixellab_book.py): 떠다니기 16칸, 공격 8칸(발톱을 치켜들었다가 책을 닫으며 할퀸다). 어느 스테이지에서나 쓴다.
+BOOK = {'sheet': 'pixellab/book', 'size': (160, 128), 'feet': 120, 'center': 86}
 
 
 def attack_frame(windup, recovery):
@@ -34,7 +36,7 @@ def attack_frame(windup, recovery):
 class MonsterSprite:
     def __init__(self, load):
         self.meta = json.loads((ASSET_ROOT / '몬스터_도트' / 'monster_sheets.json').read_text(encoding='utf-8'))
-        self.meta['crawler'], self.meta['watcher'] = SPIDER, WATCHER
+        self.meta['crawler'], self.meta['watcher'], self.meta['magic_book'] = SPIDER, WATCHER, BOOK
         self.sheets = {(kind, echo): load(f'몬스터_도트/{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
 
@@ -57,7 +59,7 @@ class MonsterSprite:
             opacity = min(opacity, GHOST_ALPHA)
         flip = actor.facing > 0
         center = (width - info['center']) if flip else info['center']
-        bottom = floor_y - (height - info['feet']) * scale + (HOVER if base == 'watcher' else 0)
+        bottom = floor_y - (height - info['feet']) * scale + HOVER.get(base, 0)
         image = self.sheets[(base, echo)]
         canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
         canvas.SDL_SetTextureColorMod(image.texture, *tint)

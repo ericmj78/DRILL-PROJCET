@@ -215,7 +215,7 @@ class View:
         self.poison_fx = PoisonFx()
         self.pixel_backdrop = PixelBackdrop()
         self.pixel_sprites = PixelSprites()   # 1스테이지 장식물 도트
-        self.hero_sprite = HeroSprite(load_asset)   # 1스테이지 도트 주인공 (보라 망토)
+        self.hero_sprite = HeroSprite(load_asset)   # 모든 스테이지의 도트 주인공 (PixelLab)
         self.monster_sprite = MonsterSprite(load_asset)   # 1스테이지 도트 거미·외눈 유령
         self.stage1_folder_monsters = monster_sprite.StageOneFolderMonsters(load_asset)
         self.gate_lift = {}                   # 문 창살이 올라간 정도 (0~1)
@@ -1141,6 +1141,9 @@ class View:
             if world.index == 0 and enemy.spawn.kind in monster_sprite.KINDS:
                 self.stage1_folder_monsters.draw(enemy.spawn.kind, screen_enemy.actor, y, world.time,
                                                 enemy.windup, enemy.recovery, tint=tint)
+            elif enemy.spawn.kind == 'magic_book':   # PixelLab 시트: 떠다니기·공격이 시트 안에 있다
+                self.monster_sprite.draw('magic_book', screen_enemy.actor, y, world.time,
+                                         enemy.windup, enemy.recovery, tint=tint)
             elif enemy.spawn.kind == 'echo_knight':
                 self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
                 if skill_phase is None and pose is not None:
@@ -1246,28 +1249,10 @@ class View:
             floors[lower] += (floors[lower + 1] - floors[lower]) * world.lift_progress
             self.floor_y = tuple(floors)
         floor = self._actor_floor_y(world.player) + world.player.jump_height
-        if world.index == 0:
-            attack = None
-            if world.attack_flash > 0:
-                attack = (world.attack_kind, 1 - world.attack_flash / world.attack_duration)
-            self.hero_sprite.draw(player, floor, world.weapon_index, player_alpha, world.time, attack)
-        elif world.attack_flash > 0:
-            # 공격 중에는 player_attack.py의 키프레임대로 몸을 내디디고 무기를 움직인다.
-            progress = 1 - world.attack_flash / world.attack_duration
-            body = copy(player)
-            body.x += player.facing * player_attack.weapon_pose(world.attack_kind, progress)[3]
-            blend = player_attack.body_frames(progress) if world.weapon_index == 2 else None
-            height = 91 if world.weapon_index == 2 else None
-            self.player_attack.draw(body, floor, progress, opacity=player_alpha, blend_frames=blend, height=height)
-            if world.weapon_index:
-                for past, strength in player_attack.trail(progress):
-                    self._draw_weapon(player, world.weapon_index, floor, past, round(player_alpha * strength), world.attack_kind)
-                self._draw_weapon(player, world.weapon_index, floor, progress, player_alpha, world.attack_kind)
-        else:
-            if world.weapon_index == 2:
-                self._draw_unified_sword_player(player, floor, player_alpha)
-            else:
-                self._avatar(self.player, self.player_walk, player, opacity=player_alpha)
+        attack = None
+        if world.attack_flash > 0:
+            attack = (world.attack_kind, 1 - world.attack_flash / world.attack_duration)
+        self.hero_sprite.draw(player, floor, world.weapon_index, player_alpha, world.time, attack)
         player_attack.draw_attack_effect(
             self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
             WEAPONS[world.weapon_index].reach, player.x, floor, player.facing)
@@ -1291,11 +1276,11 @@ class View:
         world_actor = actor
         actor = self._screen_actor(actor)
         pixel = self.current_world is not None and self.current_world.index == 0
-        if pixel and monster_kind is None:
+        if monster_kind is None:   # 기본 분신은 모든 스테이지에서 PixelLab 주인공의 은빛 시트
             self.hero_sprite.draw(actor, self._actor_floor_y(actor) + actor.jump_height,
                                   2, opacity, self.animation_time, echo=True)
             return
-        if monster_kind is None or monster_kind not in self.monster_echo_walk:
+        if monster_kind not in self.monster_echo_walk:
             self._avatar(self.echo, self.echo_walk, actor, opacity=255)
             return
         floor = self._actor_floor_y(actor) + actor.jump_height
@@ -1330,7 +1315,7 @@ class View:
                 line(actor.x + (tx - actor.x) * a, floor + 34 + (ty - floor - 34) * a,
                      actor.x + (tx - actor.x) * b, floor + 34 + (ty - floor - 34) * b, color)
             box(tx - 4, ty - 4, tx + 4, ty + 4, color)
-        if pixel and monster_kind in monster_sprite.KINDS:
+        if pixel and monster_kind in monster_sprite.KINDS or monster_kind == 'magic_book':
             self.monster_sprite.draw(monster_kind, actor, floor, self.animation_time,
                                      opacity=opacity, echo=True)
             return
