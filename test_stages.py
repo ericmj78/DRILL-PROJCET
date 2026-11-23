@@ -265,10 +265,35 @@ def stage_2(b):
             b.super_jump(land_x)
             assert b.me.base > 0, f'발판에 착지하지 못했습니다 {b} 높이 {b.me.base}'
 
-    # [1·2층 통합방] 보이는 발판을 지그재그로 올라 오른쪽 위 스위치를 누른다.
+    def leap(aim, height, reach=135):
+        """움직이는 발판으로: aim(시계) 자리가 모으기 1초 + 착지 0.66초 뒤에 닿을 거리로 올 때
+        모으기 시작하고, 날아가며 aim을 따라간다. 서 있는 발판도 움직이므로 실려 갈 거리를 더한다."""
+        w = b.w
+        here = next((p for p in w.stage.platforms if p.floor == b.me.floor and p.height == b.me.base), None)
+        for _ in range(round(6 / STEP)):
+            now = w.platform_clock()
+            start = b.me.x + (here.shift(now + 1) - here.shift(now) if here else 0)
+            if abs(aim(now + 1.66) - start) <= reach:
+                break
+            b.tick()
+        else:
+            raise AssertionError(f'뛸 때를 찾지 못했습니다 {b}')
+        b.tick(jump=True, held=True)
+        while b.me.beast_charge_active and w.result == 'playing':
+            b.tick(held=True)
+        while w.result == 'playing' and (b.me.jump_time > 0 or b.me.fall_speed):
+            gap = aim(w.platform_clock()) - b.me.x
+            b.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
+        assert b.me.base == height, f'움직이는 발판에 착지하지 못했습니다 {b} 높이 {b.me.base}'
+
+    def middle(index):
+        return lambda clock: sum(b.w.platform_span(index, clock)) / 2
+
+    # [1·2층 통합방] 좁은 발판을 오른쪽·왼쪽으로 번갈아 올라 오른쪽 위 스위치를 누른다.
+    # 발판 끝에서 뛰고 제때 멈춰야 한다. 마지막 턱은 끝까지 날아가야 닿는다.
     b.go(520)
     b.w.start_recording('beast')
-    climb(((520, 575), (640, 765), (830, 955), (940, 835), (850, 975), (1040, 1155), (1220, 1345)))
+    climb(((540, 660), (677, 805), (793, 718), (703, 573), (587, 718), (731, 878), (893, 1060)))
     b.go(1820)
     assert b.w.switched[0], f'스위치가 눌리지 않았습니다 {b}'
     b.rec()
@@ -281,13 +306,17 @@ def stage_2(b):
     b.wait(0.2)
     assert b.w.lens_lit and len(b.w.revealed) == 7, f'렌즈가 켜지지 않았습니다 {b}'
     b.rec()
-    # 25초 안에 뿔짐승 분신이 숨은 발판을 올라 왼쪽 위 스위치를 누른다. 떨어지면 구덩이다.
+    # 25초 안에 뿔짐승 분신이 좌우로 움직이는 숨은 발판을 올라 왼쪽 위 스위치를 누른다. 떨어지면 구덩이다.
     b.w.start_recording('beast')
     b.go(1830)
-    climb(((1830, 1725), (1660, 1535), (1470, 1345), (1280, 1155), (1090, 965), (900, 775), (710, 585)))
+    for index in range(7, 13):
+        leap(middle(index), b.w.stage.platforms[index].height)
+    leap(lambda clock: 595, 630)
     b.go(300)
     assert b.w.switched[1], f'출구 스위치가 눌리지 않았습니다 {b}'
     b.rec()
+    # 재현 분신도 녹화 때와 같은 때에 움직이는 발판을 만나 똑같이 오른다.
+    b.until(lambda w: w.echo is not None and w.echo.actor.base >= 270, limit=8)
     b.go(2140, slash=False)
 
 
@@ -601,7 +630,7 @@ def check_puzzles():
     # 점프맵: 보통 점프로는 첫 발판(높이 90)에 오르지 못하고, 스위치 없이는 잠긴 문을 못 지난다.
     w = World(1)
     w.enemies = []
-    w.player.x = 600
+    w.player.x = 660                  # 첫 발판 바로 아래
     for frame in range(60):
         w.step(Motion(jump=frame == 0))
     assert w.player.base == 0, '보통 점프로 점프맵 발판에 올랐습니다'

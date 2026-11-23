@@ -122,6 +122,7 @@ class Recording:
     preview: Actor
     inputs: list[Motion] = field(default_factory=list)
     monster_kind: str | None = None
+    clock: float = 0.0         # 녹화를 시작할 때의 움직이는 발판 시계
 
 
 @dataclass
@@ -130,6 +131,7 @@ class Echo:
     inputs: tuple[Motion, ...]
     cursor: int = 0
     monster_kind: str | None = None
+    clock: float = 0.0
 
 
 @dataclass
@@ -297,11 +299,13 @@ class World:
             self.notify('바닥에 내려선 뒤 분신 녹화를 시작하세요.')
             return
         if self.recording is None:
+            clock = self.platform_clock()
             # 녹화용 분신을 만들기 전에 기존 재현 분신을 없애 한 명만 유지한다.
             self._remove_echo()
             start = Point(self.player.x, self.player.floor)
             facing = self.player.facing
-            self.recording = Recording(start, facing, Actor.at(start, facing), monster_kind=monster_kind)
+            self.recording = Recording(start, facing, Actor.at(start, facing), monster_kind=monster_kind,
+                                       clock=clock)
             self._update_doors(0)
             self.notify('분신으로 이동하고 필요한 자리에서 기다리세요.')
 
@@ -349,7 +353,8 @@ class World:
             self.notify('분신이 재현할 녹화가 비어 있어요.')
             return
         self._remove_echo()
-        self.echo = Echo(Actor.at(record.start, record.facing), tuple(record.inputs), monster_kind=record.monster_kind)
+        self.echo = Echo(Actor.at(record.start, record.facing), tuple(record.inputs),
+                         monster_kind=record.monster_kind, clock=record.clock)
         self._update_doors(0)
         self.notify('녹화 상한에 도달해 재현을 시작합니다.' if time_limit else '본체 조작 재개 · 분신이 재현합니다.')
 
@@ -703,6 +708,33 @@ class World:
     def platform_visible(self, index: int) -> bool:
         return not self.stage.platforms[index].hidden or index in self.revealed
 
+    def platform_clock(self) -> float:
+        """움직이는 발판의 시계. 분신을 녹화·재현하는 동안은 그 프레임 번호로 세어서
+        재현 분신이 녹화 때와 똑같이 움직이는 발판을 만나게 한다."""
+        if self.recording is not None:
+            return self.recording.clock + len(self.recording.inputs) * STEP
+        if self.echo is not None:
+            return self.echo.clock + self.echo.cursor * STEP
+        return self.time
+
+    def platform_span(self, index: int, clock: float | None = None) -> tuple[float, float]:
+        platform = self.stage.platforms[index]
+        shift = platform.shift(self.platform_clock() if clock is None else clock)
+        return platform.left + shift, platform.right + shift
+
+    def _ride(self, actor: Actor):
+        """움직이는 발판 위에 서 있으면 발판과 함께 옮겨 간다."""
+        if actor.jump_time > 0 or actor.fall_speed or actor.base <= 0 or actor.web_time > 0:
+            return
+        clock = self.platform_clock()
+        for index, platform in enumerate(self.stage.platforms):
+            if (platform.swing and platform.floor == actor.floor and platform.height == actor.base
+                    and self.platform_visible(index)):
+                left, right = self.platform_span(index, clock - STEP)
+                if left <= actor.x <= right:
+                    actor.x += platform.shift(clock) - platform.shift(clock - STEP)
+                    return
+
     def _over_pit(self, floor: int, x: float) -> bool:
         return any(pit_floor == floor and left < x < right for pit_floor, left, right in self.stage.pits)
 
@@ -711,9 +743,10 @@ class World:
         if not self._over_pit(actor.floor, actor.x):
             yield 0.0
         for index, platform in enumerate(self.stage.platforms):
-            if (platform.floor == actor.floor and platform.left <= actor.x <= platform.right
-                    and self.platform_visible(index)):
-                yield float(platform.height)
+            if platform.floor == actor.floor and self.platform_visible(index):
+                left, right = self.platform_span(index)
+                if left <= actor.x <= right:
+                    yield float(platform.height)
 
     def _settle(self, actor: Actor, before: float):
         """발판 착지와 낙하. 점프가 내려오다 발판 높이를 지나면 그 위에 선다."""
@@ -767,7 +800,8 @@ class World:
                 self.lens_lit = True
                 self.notify('렌즈가 빛을 퍼뜨려 숨은 발판이 모두 드러났습니다!')
             for index, platform in enumerate(self.stage.platforms):
-                x = min(max(actor.x, platform.left), platform.right)
+                left, right = self.platform_span(index)
+                x = min(max(actor.x, left), right)
                 if platform.floor == actor.floor and (
                         lit or hypot(x - actor.x, platform.height - eye) <= RADAR_RANGE):
                     self.revealed.add(index)
@@ -786,6 +820,7 @@ class World:
                     break
 
     def _move(self, actor: Actor, motion: Motion, monster_kind=None):
+        self._ride(actor)
         before = actor.jump_height
         self._move_body(actor, motion, monster_kind)
         self._settle(actor, before)

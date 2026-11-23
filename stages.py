@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import pi, sin
 
 
 LEFT, RIGHT = 48, 2192
@@ -62,12 +63,19 @@ class JumpBlock:
 
 @dataclass(frozen=True)
 class Platform:
-    """공중 발판. 바닥 위 height 높이에 있다. hidden이면 외눈 유령 분신의 레이더로 드러난 동안만 밟힌다."""
+    """공중 발판. 바닥 위 height 높이에 있다. hidden이면 외눈 유령 분신의 레이더로 드러난 동안만 밟힌다.
+    swing이 있으면 left~right 자리를 가운데로 좌우 swing px만큼 period초마다 한 번 오간다."""
     floor: int
     left: int
     right: int
     height: int
     hidden: bool = True
+    swing: int = 0
+    period: float = 1.0
+    phase: float = 0.0     # 0~1, 처음 위치
+
+    def shift(self, clock: float) -> float:
+        return self.swing * sin(2 * pi * (clock / self.period + self.phase)) if self.swing else 0.0
 
 
 @dataclass(frozen=True)
@@ -277,16 +285,24 @@ STAGES = (
         2, Point(112, 0), Point(2140, 1),
         floor_height=800,
         # [1·2층 통합방] 바닥이 있다. 발판 사이 높이는 90이라 보통 점프(42)로는 못 오르고
-        # 뿔짐승 분신의 슈퍼 점프(100)로만 오른다. 오른쪽 위 턱의 스위치가 아래 잠긴 문을 연다.
+        # 뿔짐승 분신의 슈퍼 점프(100)로만 오른다. 슈퍼 점프는 내려오며 발판 높이를 지날 때까지
+        # 최대 약 150px 날아간다. 발판은 폭 35~40으로 좁고 간격은 125~145라 끝에서 뛰고 제때 멈춰야 한다.
+        # 방향도 오른쪽·왼쪽으로 번갈아 바뀐다. 마지막 턱은 발판 끝에서 끝까지 날아야 닿는다(여유 약 10px).
+        # 오른쪽 위 턱의 스위치가 아래 잠긴 문을 연다.
         # [3·4층 통합방] 바닥이 뚫려 있다(떨어지면 죽는다). 발판은 숨어 있고, 외눈 유령 분신의
-        # 레이더가 오른쪽 렌즈에 닿으면 모두 드러난다. 왼쪽 위 턱의 스위치가 출구 문을 연다.
+        # 레이더가 오른쪽 렌즈에 닿으면 모두 드러난다. 발판은 좌우로 움직여서 다음 발판이
+        # 다가오는 때를 보고 1초 먼저 모으기 시작해야 한다. 왼쪽 위 턱의 스위치가 출구 문을 연다.
         platforms=(
-            Platform(0, 550, 650, 90, False), Platform(0, 740, 840, 180, False),
-            Platform(0, 930, 1030, 270, False), Platform(0, 760, 860, 360, False),
-            Platform(0, 950, 1050, 450, False), Platform(0, 1130, 1230, 540, False),
-            Platform(0, 1320, 1880, 630, False),
-            Platform(1, 1650, 1750, 90), Platform(1, 1460, 1560, 180), Platform(1, 1270, 1370, 270),
-            Platform(1, 1080, 1180, 360), Platform(1, 890, 990, 450), Platform(1, 700, 800, 540),
+            Platform(0, 640, 680, 90, False), Platform(0, 790, 825, 180, False),
+            Platform(0, 700, 735, 270, False), Platform(0, 555, 590, 360, False),
+            Platform(0, 700, 735, 450, False), Platform(0, 860, 895, 540, False),
+            Platform(0, 1035, 1880, 630, False),
+            Platform(1, 1665, 1735, 90, swing=70, period=3.0),
+            Platform(1, 1485, 1555, 180, swing=80, period=2.6, phase=0.25),
+            Platform(1, 1305, 1375, 270, swing=60, period=2.2, phase=0.5),
+            Platform(1, 1125, 1195, 360, swing=90, period=3.4, phase=0.1),
+            Platform(1, 945, 1015, 450, swing=70, period=2.4, phase=0.6),
+            Platform(1, 765, 835, 540, swing=80, period=2.8, phase=0.35),
             Platform(1, 200, 610, 630),
         ),
         pits=((1, 48, 1820),),

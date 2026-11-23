@@ -278,6 +278,7 @@ class View:
         self.enemy_walk = {
             name: MonsterWalk(load_asset(gait.sheet), gait)
             for name, gait in MONSTER_GAITS.items()
+            if asset_path(gait.sheet).exists()   # 새 시트로 바꾸려고 지운 부위 그림은 건너뛰고 서 있는 그림으로 그린다
         }
         watcher = actors['watcher']
         self.enemy_walk['watcher'] = WalkCycle(
@@ -901,7 +902,7 @@ class View:
             if not world.platform_visible(index):
                 continue
             y = self.floor_y[platform.floor] + platform.height
-            left, right = platform.left - self.camera_x, platform.right - self.camera_x
+            left, right = (edge - self.camera_x for edge in world.platform_span(index))
             # 숨은 발판은 보라색, 늘 보이는 점프맵 발판은 돌색
             fill, edge = ((124, 82, 178), (214, 176, 255)) if platform.hidden else ((88, 92, 112), (150, 156, 178))
             box(left, y - 10, right, y, fill)
@@ -1111,7 +1112,7 @@ class View:
                 draw_region(image, (0, 0, image.w, image.h), x - width / 2, y + bob, width, height,
                             enemy.actor.facing != -1)
                 canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
-            elif enemy.actor.moving:
+            elif enemy.actor.moving and enemy.spawn.kind in self.enemy_walk:
                 self.enemy_walk[enemy.spawn.kind].draw(
                     screen_enemy.actor, y, faces=-1, tint=tint,
                 )
