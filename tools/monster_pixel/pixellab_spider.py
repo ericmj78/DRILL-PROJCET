@@ -25,16 +25,19 @@ ROWS = (                   # 줄 순서는 monster_sprite.py와 같다: 걷기, 
     ('attack', 8, 43, 'spider lunge bite: the spider crouches low, then its whole body darts forward to the left close to the ground and it bites with the small fangs under its eyes, the fangs open and snap shut at the front of the head, then it scuttles back to its starting pose. legs keep the same size and shape, nothing grows. side view'),
     ('idle', 4, 0, 'spider idle, body gently bobbing up and down, legs twitching slightly, fangs moving, side view'),
 )
+# 물기 줄 칸마다 몸을 옮기는 양(+ 뒤, - 앞=왼쪽). PixelLab 동작만으로는 덮치는 폭이 작아 무는 느낌이 약했다.
+LUNGE = (0, 3, 5, 6, -12, -20, -12, -4)
 
 
-def make_base(src_path):
-    """일러스트 → 128칸 도트(원본 반영 300) → 회색 배경 제거."""
+def pixelize(src_path, width=None, height=None):
+    """일러스트 → 128칸 도트(원본 반영 300) → 회색 배경 제거 → 몸에 맞춰 자른 그림.
+    width나 height를 주면 몸 폭(또는 높이)이 128칸 중 그만큼이 되게 맞춘다."""
     src = Image.open(src_path).convert('RGBA')
     solid = src.getchannel('A').point(lambda v: 255 if v > 128 else 0)   # 원본의 옅은 얼룩은 버린다
     box = solid.getbbox()
     body = src.crop(box)
     body.putalpha(solid.crop(box))
-    side = round(body.width * 128 / 100)        # 거미 폭이 128칸 중 100칸
+    side = round(body.width * 128 / width) if width else round(body.height * 128 / height)
     sq = Image.new('RGBA', (side, side), (0, 0, 0, 0))
     sq.paste(body, ((side - body.width) // 2, (side - body.height) // 2))
     sq = sq.resize((512, 512), Image.LANCZOS)
@@ -60,10 +63,23 @@ def make_base(src_path):
         for x in range(128):
             if (x, y) in seen or near(px[x, y], 4):
                 px[x, y] = (0, 0, 0, 0)
-    img = img.crop(img.getbbox())   # 색 수를 줄이지 않는다: 줄이면 6픽셀짜리 주황 눈이 사라진다
+    return img.crop(img.getbbox())   # 색 수를 줄이지 않는다: 줄이면 6픽셀짜리 주황 눈이 사라진다
+
+
+def make_base(src_path):
+    img = pixelize(src_path, width=100)
     base = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     base.paste(img, (LEFT, FEET - img.height))
     return base
+
+
+def lunge(frame, dx):
+    """칸 안에서 그림을 dx만큼 옆으로 옮긴다. 칸 밖으로 잘려 나가면 안 된다."""
+    box = frame.getbbox()
+    assert box is None or (box[0] + dx >= 0 and box[2] + dx <= frame.width), (box, dx)
+    out = Image.new('RGBA', frame.size, (0, 0, 0, 0))
+    out.paste(frame, (dx, 0))
+    return out
 
 
 if __name__ == '__main__':
@@ -82,6 +98,8 @@ if __name__ == '__main__':
             frame = drop_specks(to_palette(frame, palette), keep=30)
             # 거미는 어느 칸에서도 y 48 위로 올라가지 않는다. 그 위는 PixelLab이 만든 연기 같은 덩어리라 지운다.
             frame.paste((0, 0, 0, 0), (0, 0, W, SKY))
+            if name == 'attack':
+                frame = lunge(frame, LUNGE[column])
             sheet.paste(frame, (column * W, row * H))
         print(name, len(frames))
     sheet.save(OUT / 'spider.png')
