@@ -82,7 +82,8 @@ def pixelize(src_path, width=None, height=None):
     return img.crop(img.getbbox())   # 색 수를 줄이지 않는다: 줄이면 6픽셀짜리 주황 눈이 사라진다
 
 
-def make_base(src_path):
+def make_base(src_path, look=LOOK, width=WIDTH, size=(W, H), left=LEFT, feet=FEET):
+    """일러스트 → Pro 도트 → 흰 배경 제거 → 몸 폭 width로 줄여 size 칸의 (left, 발밑 feet)에 놓는다."""
     src = Image.open(src_path).convert('RGBA')
     solid = src.getchannel('A').point(lambda v: 255 if v > 128 else 0)   # 원본의 옅은 얼룩은 버린다
     box = solid.getbbox()
@@ -90,29 +91,29 @@ def make_base(src_path):
     body.putalpha(solid.crop(box))
     pad = Image.new('RGBA', (body.width + 80, body.height + 80), (0, 0, 0, 0))
     pad.paste(body, (40, 40))
-    img = unb64(wait(call('POST', '/image-to-pixelart-pro', {'image': b64(pad), 'seed': 2, 'description': LOOK}))['image'])
+    img = unb64(wait(call('POST', '/image-to-pixelart-pro', {'image': b64(pad), 'seed': 2, 'description': look}))['image'])
     px = img.load()
     for y in range(img.height):          # 흰 배경 (가장자리와 다리 사이 모두)
         for x in range(img.width):
             if px[x, y][3] and min(px[x, y][:3]) >= 235:
                 px[x, y] = (0, 0, 0, 0)
     img = img.crop(img.getbbox())
-    size = {'width': WIDTH, 'height': round(img.height * WIDTH / img.width)}
+    target = {'width': width, 'height': round(img.height * width / img.width)}
     img = unb64(call('POST', '/resize', {
-        'description': LOOK, 'reference_image': b64(img),
-        'reference_image_size': {'width': img.width, 'height': img.height}, 'target_size': size,
+        'description': look, 'reference_image': b64(img),
+        'reference_image_size': {'width': img.width, 'height': img.height}, 'target_size': target,
         'view': 'side', 'direction': 'west', 'no_background': True, 'color_image': b64(img), 'seed': 1})['image'])
     img = img.crop(img.getbbox())
-    base = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    base.paste(img, (LEFT, FEET - img.height))
+    base = Image.new('RGBA', size, (0, 0, 0, 0))
+    base.paste(img, (left, feet - img.height))
     return base
 
 
-def animate_pm(base, count, seed, action):
+def animate_pm(base, count, seed, action, subject=SUBJECT):
     """PixMiniMax. 마지막 칸을 기본 자세로 고정한다 (걷기·대기는 끊김 없이 반복, 물기는 제자리로 돌아온다).
     돌려받는 칸: 0 = 입력, 1..count = 생성 (count번째 = 기본 자세)."""
     return [unb64(i) for i in wait(call('POST', '/animate-pixminimax', {
-        **SUBJECT, 'first_frame': b64(base), 'last_frame': b64(base), 'description': action,
+        **subject, 'first_frame': b64(base), 'last_frame': b64(base), 'description': action,
         'frame_count': count, 'seed': seed, 'no_background': True}))['images']]
 
 
@@ -125,17 +126,18 @@ def lunge(frame, dx):
     return out
 
 
-def build_sheet(base, rows):
-    """rows: 이름 → 생성된 칸 목록(animate_pm 결과). 걷기·대기는 0번부터, 물기는 1번부터 쓴다."""
+def build_sheet(base, rows, spec=ROWS, push=LUNGE):
+    """rows: 이름 → 생성된 칸 목록(animate_pm 결과). 걷기·대기는 0번부터, 공격은 1번부터 쓰고 push만큼 옮긴다."""
+    w, h = base.size
     palette = sorted({c[:3] for c in base.get_flattened_data() if c[3]})
-    sheet = Image.new('RGBA', (W * 8, H * len(ROWS)), (0, 0, 0, 0))
-    for row, (name, count, _, _) in enumerate(ROWS):
+    sheet = Image.new('RGBA', (w * 8, h * len(spec)), (0, 0, 0, 0))
+    for row, (name, count, _, _) in enumerate(spec):
         frames = rows[name][1:count + 1] if name == 'attack' else rows[name][:count]
         for column, frame in enumerate(frames):
             frame = drop_specks(to_palette(frame, palette), keep=30)
             if name == 'attack':
-                frame = lunge(frame, LUNGE[column])
-            sheet.paste(frame, (column * W, row * H))
+                frame = lunge(frame, push[column])
+            sheet.paste(frame, (column * w, row * h))
     return sheet
 
 

@@ -156,7 +156,6 @@ class View:
         self.background = load_asset('dungeon.png')
         self.hud_concept = load_asset('ui_concepts/echo_hud_concept.png')
         self.echo_selection_panel = load_asset('ui_concepts/echo_selection_panel.png')
-        self.beast_super_jump = load_asset('monster_echo_concepts/hornbeast_echo_super_jump.png')
         self.boss_bars = {
             'jailer_boss': load_asset('ui_concepts/boss_bar_jailer_named.png'),
             'grand_witch': load_asset('ui_concepts/boss_bar_witch_named.png'),
@@ -1298,17 +1297,11 @@ class View:
             self._avatar(self.echo, self.echo_walk, actor, opacity=255)
             return
         floor = self._actor_floor_y(actor) + actor.jump_height
-        if monster_kind == 'beast' and (actor.beast_charge_active or actor.beast_super_jump):
-            image = self.beast_super_jump
-            width, height = image.w // 4, image.h // 2
-            frame = (min(2, int(actor.beast_charge * 3)) if actor.beast_charge_active
-                     else 3 + min(4, int(actor.jump_time / actor.jump_duration * 5)))
-            foot_rows = (350, 349, 347, 350, 312, 254, 320, 360)
-            foot_offset = 115 * (443 - foot_rows[frame]) / 443
-            canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
-            draw_region(image, ((frame % 4) * width, (frame // 4) * height, width, height),
-                        actor.x - 57.5, floor - foot_offset, 115, 115, actor.facing != -1)
-            canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+        if monster_kind == 'beast' and actor.beast_charge_active:
+            # 슈퍼 점프를 모으는 동안 공격 준비 칸(머리를 낮추고 웅크림)을 모은 만큼 보여 준다. 날아가는 동안은 아래에서 그린다.
+            windup = monster_sprite.WINDUP * max(0.01, 1 - actor.beast_charge)
+            self.monster_sprite.draw('beast', actor, floor, self.animation_time, windup=windup,
+                                     opacity=opacity, echo=True)
             return
         if monster_kind == 'crawler' and actor.web_time > 0 and not actor.web_flying:
             # 천장에 붙인 거미줄. 감으면 짧아지고 몸이 올라간다.

@@ -21,8 +21,10 @@ WATCHER = {'sheet': 'PixelLab/몬스터/watcher', 'size': (112, 136), 'feet': 12
 BOOK = {'sheet': 'PixelLab/몬스터/book', 'size': (160, 128), 'feet': 120, 'center': 86}
 # 물약 슬라임(pixellab_slime.py): 걷기 8, 공격 8(몸을 늘였다가 내리쳐 물약이 튄다), 대기 4. 줄 순서는 거미와 같다.
 SLIME = {'sheet': 'PixelLab/몬스터/slime', 'size': (160, 128), 'feet': 122, 'center': 86}
-WALKERS = frozenset(('crawler', 'potion_slime'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
-ANYWHERE = frozenset(('magic_book', 'potion_slime'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
+# 뿔짐승(pixellab_beast.py): 걷기 8, 공격 8(머리를 낮췄다가 몸을 뻗어 덮친다), 대기 4. 줄 순서는 거미와 같다.
+BEAST = {'sheet': 'PixelLab/몬스터/beast', 'size': (224, 128), 'feet': 122, 'center': 130}
+WALKERS = frozenset(('crawler', 'potion_slime', 'beast'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
+ANYWHERE = frozenset(('magic_book', 'potion_slime', 'beast'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
 
 
 def attack_frame(windup, recovery):
@@ -36,7 +38,7 @@ def attack_frame(windup, recovery):
 
 class MonsterSprite:
     def __init__(self, load):
-        self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME)
+        self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME, beast=BEAST)
         self.sheets = {(kind, echo): load(f'{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
 
