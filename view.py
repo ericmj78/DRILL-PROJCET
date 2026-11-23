@@ -169,6 +169,8 @@ class View:
             image = load_asset(name)
             self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
         self.wizard_art = load_asset('wizard_castle/castle-dark.png')
+        self.sky_library_art = load_asset('층별맵/3스테이지_마법도서관_통합배경.png')
+        sdl2.SDL_SetTextureScaleMode(self.sky_library_art.texture, sdl2.SDL_ScaleModeLinear)
         self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
         self.late_three_floor_art = load_asset('map_sections/echo-knight-approach-three-floors-concept.png')
         self.echo_boss_arena = load_asset('map_sections/echo-knight-arena-concept.png')
@@ -424,22 +426,29 @@ class View:
                                         start - self.camera_x, floor_y - 92, end - start, 92)
                         start = max(start, right)
             elif world.stage.sky:
-                # 하늘 땅: 위로 갈수록 짙어지는 하늘, 천천히 흐르는 구름, 돌바닥 한 줄.
                 floor_y = self.floor_y[0]
-                for band in range(12):
-                    t = band / 11
-                    box(0, HEIGHT * band / 12, WIDTH, HEIGHT * (band + 1) / 12 + 1,
-                        (round(150 - 90 * t), round(196 - 100 * t), round(232 - 60 * t)))
-                for i in range(9):
-                    x = (i * 263 + world.time * (6 + i % 3)) % (RIGHT + 200) - 100 - self.camera_x * 0.5
-                    y = floor_y + 140 + (i * 97) % 380
-                    for dx, radius in ((-26, 18), (0, 26), (28, 20)):
-                        self._disc(x + dx, y, radius, (214, 230, 244))
-                image = self.stage1_pixel_image
-                floor_row = round(image.h * 610 / 724)
-                box(0, 0, WIDTH, floor_y - 90, (40, 36, 48))
+                image = self.sky_library_art
+                floor_row = round(image.h * 839 / 903)
+                draw_region(image, (0, 0, image.w, floor_row),
+                            -self.camera_x, floor_y, WIDTH * 2, 1000)
                 draw_region(image, (0, floor_row, image.w, image.h - floor_row),
-                            -self.camera_x, floor_y - 92, WIDTH * 2, 92)
+                            -self.camera_x, floor_y - 160, WIDTH * 2, 160)
+                for i in range(9):
+                    x = 580 + i * 120 - self.camera_x
+                    rain, data = self.wizard_fx['rain']
+                    rain_frame = data['frames'][int(world.time * 4) % len(data['frames'])]['frame']
+                    canvas.SDL_SetTextureAlphaMod(rain.texture, 65)
+                    draw_region(rain, (rain_frame['x'], rain_frame['y'], rain_frame['w'],
+                                       round(rain_frame['h'] * 0.85)), x, floor_y + 85, 120, 840)
+                    canvas.SDL_SetTextureAlphaMod(rain.texture, 255)
+                if 9.0 <= world.time % 18 < 9.5:
+                    storm, storm_data = self.wizard_fx['storm']
+                    index = 12 + int((world.time % 18 - 9.0) * 4)
+                    frame = storm_data['frames'][index]['frame']
+                    canvas.SDL_SetTextureAlphaMod(storm.texture, 150)
+                    draw_region(storm, (frame['x'] + 150, frame['y'] + 20, 120, frame['h'] - 40),
+                                1260 - self.camera_x, floor_y + 300, 260, 520)
+                    canvas.SDL_SetTextureAlphaMod(storm.texture, 255)
             else:
                 for floor, floor_y in enumerate(self.floor_y):
                     corridor = self.floor_images[world.index][floor]
