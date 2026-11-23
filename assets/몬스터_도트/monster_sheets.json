@@ -1,0 +1,29 @@
+{
+ "crawler": {
+  "sheet": "spider",
+  "size": [
+   112,
+   84
+  ],
+  "rows": [
+   8,
+   8,
+   4
+  ],
+  "feet": 77,
+  "center": 52
+ },
+ "watcher": {
+  "sheet": "watcher",
+  "size": [
+   96,
+   124
+  ],
+  "rows": [
+   16,
+   8
+  ],
+  "feet": 117,
+  "center": 46
+ }
+}
