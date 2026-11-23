@@ -20,11 +20,20 @@ class Bot:
     def me(self):  # 지금 조작 중인 대상
         return self.w.recording.preview if self.w.recording else self.w.player
 
-    def tick(self, horizontal=0, stairs=0, jump=False, attack=False):
+    def tick(self, horizontal=0, stairs=0, jump=False, attack=False, web=False, held=False):
         while self.w.pending_monster_echo:
             self.w.resolve_monster_echo()
-        self.w.step(Motion(horizontal, stairs, jump), attack)
+        self.w.step(Motion(horizontal, stairs, jump, web, held), attack)
         self.frames += 1
+
+    def super_jump(self, target_x):
+        """뿔짐승 분신: Space를 1초 눌러 모았다가 슈퍼 점프하고, 날아가며 target_x 쪽으로 몸을 튼다."""
+        self.tick(jump=True, held=True)
+        while self.me.beast_charge_active and self.w.result == 'playing':
+            self.tick(held=True)
+        while self.w.result == 'playing' and (self.me.jump_time > 0 or self.me.fall_speed):
+            gap = target_x - self.me.x
+            self.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
 
     def go(self, x, slash=False):
         """x까지 걷는다. slash=True면 걸으면서 계속 벤다."""
@@ -65,8 +74,32 @@ class Bot:
     def jump(self, direction):
         """걷는 방향으로 한 번 뛰어 착지할 때까지 이동한다."""
         self.tick(direction, jump=True)
-        while self.me.jump_time > 0:
+        while (self.me.jump_time > 0 or self.me.fall_speed) and self.w.result == 'playing':
             self.tick(direction)
+
+    def _ghosts_coming(self, near):
+        """같은 단이나 바로 위아래 단에서 다가오는(또는 바로 옆의) 층 유령."""
+        me = self.me
+        return [e for e in self.w.enemies if e.spawn.kind == 'tier_ghost' and e.actor.floor == me.floor
+                and abs(e.actor.base - me.base) <= 50 and abs(e.actor.x - me.x) < near
+                and ((e.actor.x - me.x) * e.actor.facing < 0 or abs(e.actor.x - me.x) < 90)]
+
+    def ghosts(self, near=200):
+        """다가오는 층 유령을 제자리에서 벤다."""
+        for _ in range(round(8 / STEP)):
+            foes = self._ghosts_coming(near)
+            if not foes or self.w.result != 'playing':
+                return
+            me = self.me
+            toward = 1 if min(foes, key=lambda e: abs(e.actor.x - me.x)).actor.x > me.x else -1
+            self.tick(toward if me.facing != toward else 0, attack='slash')
+        raise AssertionError(f'유령을 처치하지 못했습니다 {self}')
+
+    def cross(self, x):
+        """발판 위를 걷다가 유령이 다가오면 멈춰서 벤다."""
+        while self.w.result == 'playing' and abs(self.me.x - x) >= 3:
+            self.ghosts()
+            self.tick(1 if x > self.me.x else -1)
 
     def rec(self):  # C 키
         self.w.toggle_recording()
@@ -148,42 +181,114 @@ def solution(number):
 
 @solution(1)
 def stage_1(b):
-    # A 발판과 A 문 사이에서 녹화를 시작해야 분신과 본체가 걷는 거리가 둘 다 짧다.
+    # 1층: 분신이 A 발판을 오래 밟는 동안 A·B 문 사이의 거미를 잡는다.
     b.go(500)
     b.rec()
-    b.go(267)      # A 발판: 본체가 A 문에 들어설 때까지
-    b.wait(0.4)
-    b.go(430)      # B 발판: 본체가 B 문까지 달릴 동안
-    b.wait(2.6)
+    b.go(267)
+    b.wait(5)
     b.rec()
-    b.go(1950, slash=True)
+    b.go(1000, slash=True)
+    while sum(e.spawn.kind == 'crawler' for e in b.w.enemies) > 1:
+        b.tick(attack='slash')
+    # A 문 바로 뒤에서 녹화하면 A 문이 열려 있어 분신이 B 발판으로 돌아갈 수 있다.
+    b.go(790)
+    b.rec()
+    b.go(430)
+    b.wait(6)
+    b.rec()
+    b.wait(0.6)    # 분신이 A 문을 지나갈 때까지 문 곁에 있는다
+    b.go(1600)
+    b.kill('crawler')
+    b.go(1950)
     b.up()
+    # 2층: 독 웅덩이는 쉬는 바닥 사이를 점프로 건넌다. 웅덩이마다 한 번은 맞는다.
+    b.go(1505)
+    b.jump(-1)
+    b.go(1278)
+    b.jump(-1)
+    b.jump(-1)
+    b.go(900)
+    b.jump(-1)
+    b.jump(-1)
+    b.jump(-1)
     b.go(350)
     b.up()
-    b.go(2100, slash=True)
+    # 3층: 외눈 유령을 잡아 레벨업으로 체력을 채우고, 그 분신의 레이더로 발판을 드러낸다.
+    b.kill('watcher')
+    b.go(530)
+
+    def climb(recording):
+        # 녹화 중인 분신은 칼을 못 쓰니 그냥 걷고, 따라가는 본체는 다가오는 유령을 베며 간다.
+        walk = b.go if recording else b.cross
+        fight = (lambda: None) if recording else b.ghosts
+        for x, direction in ((None, 1), (690, 1), (770, -1), (738, 1)):   # 1단 → 2단 → 3단 → 4단
+            if x is not None:
+                walk(x)
+            b.jump(direction)
+            fight()
+        walk(1095)
+        if not recording:   # 떨어질 2단 자리에 유령이 없을 때 내려간다
+            b.until(lambda w: not any(e.spawn.kind == 'tier_ghost' and e.actor.base == 36
+                                      and 1100 < e.actor.x < 1360 for e in w.enemies), 8)
+        walk(1230)          # 4단 → 2단
+        fight()
+        for x in (1272, 1415):   # 3단 → 4단
+            walk(x)
+            b.jump(1)
+            fight()
+        walk(1700)          # 4단 → 1단
+        fight()
+        b.jump(1)           # 오른쪽 단
+        fight()
+
+    b.w.start_recording('watcher')   # C → 외눈 유령 분신
+    b.tick(web=True)                 # F: 레이더를 켠다
+    climb(recording=True)
+    b.rec()
+    b.ghosts()
+    climb(recording=False)
+    b.go(2100)
 
 
 @solution(2)
 def stage_2(b):
-    b.go(659)
-    b.until(lambda w: enemy(w, 'beast').x < 850)   # 짐승이 사다리 쪽에 있을 때 미끼를 보낸다
+    """뿔짐승의 도약: 뿔짐승 분신이 슈퍼 점프로 발판을 올라 스위치를 누르고, 본체는 열린 문으로 나간다."""
+    b.w.monster_echoes = ['watcher']   # 1스테이지에서 얻어 온 외눈 유령 분신
+    b.w.xp = 45                        # 1스테이지를 지나며 쌓인 경험치 (레벨 2)
+    b.w.health = b.w.max_health
+    b.kill('beast')                    # 뿔짐승 분신을 얻는다
+
+    def climb(steps):
+        """steps: (발판 위에서 걸어갈 x, 다음 발판으로 뛰어 내릴 x)."""
+        for walk_x, land_x in steps:
+            b.go(walk_x)
+            b.super_jump(land_x)
+            assert b.me.base > 0, f'발판에 착지하지 못했습니다 {b} 높이 {b.me.base}'
+
+    # [1·2층 통합방] 보이는 발판을 지그재그로 올라 오른쪽 위 스위치를 누른다.
+    b.go(520)
+    b.w.start_recording('beast')
+    climb(((520, 575), (640, 765), (830, 955), (940, 835), (850, 975), (1040, 1155), (1220, 1345)))
+    b.go(1820)
+    assert b.w.switched[0], f'스위치가 눌리지 않았습니다 {b}'
     b.rec()
-    b.down()
-    b.go(380)
-    b.wait(3.0)
-    b.rec()
-    b.until(lambda w: enemy(w, 'beast').x < 620)   # 짐승이 사다리 밑을 지나간 뒤
-    b.down()
-    b.go(1200)
+    b.go(1900)                         # 열린 문을 지나 승강기
     b.up()
-    b.rec()                                        # 짐승이 돌아오기 전에 감시 구역으로
-    b.down()
-    b.go(1300)
-    b.wait(3.5)
+
+    # [3·4층 통합방] 외눈 유령 분신의 레이더를 렌즈에 비춰 숨은 발판을 모두 드러낸다.
+    b.w.start_recording('watcher')
+    b.tick(web=True)
+    b.wait(0.2)
+    assert b.w.lens_lit and len(b.w.revealed) == 7, f'렌즈가 켜지지 않았습니다 {b}'
     b.rec()
-    b.go(1950, slash=True)
-    b.up()
-    b.go(2100, slash=True)
+    # 25초 안에 뿔짐승 분신이 숨은 발판을 올라 왼쪽 위 스위치를 누른다. 떨어지면 구덩이다.
+    b.w.start_recording('beast')
+    b.go(1830)
+    climb(((1830, 1725), (1660, 1535), (1470, 1345), (1280, 1155), (1090, 965), (900, 775), (710, 585)))
+    b.go(300)
+    assert b.w.switched[1], f'출구 스위치가 눌리지 않았습니다 {b}'
+    b.rec()
+    b.go(2140, slash=False)
 
 
 @solution(3)
@@ -469,6 +574,21 @@ def check_boss_warp():
         assert w.result == 'playing' and w.health == w.max_health, stage.title
 
 
+def check_floor_warp():
+    """- 키: 스테이지의 모든 층으로 옮겨지고, 도착한 자리에서 바로 떨어지거나 다치지 않는다."""
+    for index, stage in enumerate(STAGES):
+        for floor in range(stage.floors):
+            w = World(index)
+            w.enemies = []
+            assert w.warp_to_floor(floor), (stage.title, floor)
+            for _ in range(30):
+                w.step(Motion())
+            assert (w.player.floor, w.result, w.health) == (floor, 'playing', w.max_health), (stage.title, floor, w.player)
+    w = World(0)
+    w.start_recording()
+    assert not w.warp_to_floor(2) and w.player.floor == 0   # 녹화 중에는 옮기지 않는다
+
+
 def check_late_stage_monsters():
     allowed = {'time_thief', 'cursed_lantern', 'broken_jester'}
     for stage in STAGES[6:9]:
@@ -478,14 +598,24 @@ def check_late_stage_monsters():
 
 def check_puzzles():
     """기획서 그림대로 바꾼 장치가 분신 없이는 통과되지 않는지 확인한다."""
-    # 감시등: 분신 없이 빛이 비추는 길로 들어가면 들켜서 밀려난다.
+    # 점프맵: 보통 점프로는 첫 발판(높이 90)에 오르지 못하고, 스위치 없이는 잠긴 문을 못 지난다.
     w = World(1)
-    gate = w.stage.watch_gate
     w.enemies = []
-    w.player.floor, w.player.x = gate.door.floor, gate.door.x - gate.zone - 40
-    for _ in range(round(3 / STEP)):
+    w.player.x = 600
+    for frame in range(60):
+        w.step(Motion(jump=frame == 0))
+    assert w.player.base == 0, '보통 점프로 점프맵 발판에 올랐습니다'
+    for _ in range(round(8 / STEP)):
         w.step(Motion(1))
-    assert w.player.x < gate.door.x and w.health < w.max_health, ('감시등을 그냥 지나갔습니다', w.player.x)
+    assert w.player.x < w.stage.switches[0].door.x, '스위치 없이 잠긴 문을 지났습니다'
+
+    # 3·4층 통합방: 바닥이 뚫려 있어 떨어지면 죽고, 렌즈 없이는 발판이 보이지 않는다.
+    w = World(1)
+    w.enemies = []
+    w.warp_to_floor(1)
+    for _ in range(round(3 / STEP)):
+        w.step(Motion(-1))
+    assert w.result == 'defeated' and not w.revealed, ('3·4층 구덩이에 떨어지지 않았습니다', w.player)
 
     # 낭떠러지: 분신이 만든 빛 발판 없이 들어가면 떨어져 앞쪽으로 돌아온다.
     w = World(3)
@@ -517,11 +647,49 @@ def check_puzzles():
     assert guard.target is w.echo.actor, '도발 발판의 분신을 노리지 않습니다'
 
 
+def check_hidden_platforms():
+    """1스테이지 3층: 숨은 발판은 외눈 유령 분신의 레이더로 드러난 동안만 밟힌다."""
+    def ledge():
+        w = World(0)
+        w.enemies = []
+        w.player.floor, w.player.x = 2, 530
+        return w
+
+    # 드러나지 않은 발판으로 뛰면 구덩이로 떨어져 죽는다.
+    w = ledge()
+    for frame in range(round(3 / STEP)):
+        w.step(Motion(1, jump=frame == 0))
+    assert w.result == 'defeated', ('숨은 발판을 밟았습니다', w.player)
+
+    # 레이더(F)를 켠 분신이 있는 동안은 타이머가 멈춰 있고, 분신이 사라진 뒤 10초가 지나면 다시 숨는다.
+    w = ledge()
+    w.echo = Echo(Actor(530, 2), (Motion(web=True),) + (Motion(),) * 59, monster_kind='watcher')
+    for _ in range(round(2 / STEP)):
+        w.step(Motion(int(w.player.x < 650), jump=w.player.x < 535))
+    assert w.echo is None and 0 in w.revealed and w.player.base == 0 and w.player.x > 600, '레이더로 1단 발판이 드러나지 않았습니다'
+    assert 8.9 < w.reveal_time < 9.1, w.reveal_time   # 분신이 사라진 1초 전부터 센다
+    for _ in range(round(9.5 / STEP)):
+        w.step(Motion())
+    assert not w.revealed and w.result == 'defeated', '10초 뒤 발판이 사라지지 않았습니다'
+
+    # 층 유령: 같은 높이에서 세 번 닿으면 쓰러진다. 다른 단의 유령은 닿지 않는다.
+    w = World(0)
+    ghost = next(e for e in w.enemies if e.spawn.kind == 'tier_ghost' and e.spawn.height == 0)
+    assert w.enemy_damage(ghost) * 2 < w.max_health <= w.enemy_damage(ghost) * 3
+    high = next(e for e in w.enemies if e.spawn.kind == 'tier_ghost' and e.spawn.height == 108)
+    w.player.floor, w.player.x = 2, high.actor.x
+    w.enemies = [high]
+    w.step(Motion())
+    assert w.health == w.max_health, '다른 단의 유령에게 맞았습니다'
+
+
 def main():
     check_balance()
+    check_hidden_platforms()
     check_puzzles()
     print('OK   퍼즐 장치')
     check_boss_warp()
+    check_floor_warp()
     check_late_stage_monsters()
     print('OK   밸런스 표')
     failed = False

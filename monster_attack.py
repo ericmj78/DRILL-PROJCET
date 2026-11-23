@@ -87,6 +87,7 @@ ATTACKS = {
                             Fx('claw-swipe', 0, 0.07, 16, 12, 0.65)),
 }
 ATTACKS['magic_armor_guard'] = ATTACKS['magic_armor']
+ATTACKS['tier_ghost'] = ATTACKS['watcher']
 ATTACKS['echo_knight'] = ATTACKS['magic_armor']
 
 

@@ -2,7 +2,7 @@ from time import perf_counter
 
 from pico2d import (
     SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_QUIT, SDLK_0, SDLK_4, SDLK_9, SDLK_a, SDLK_b, SDLK_BACKSPACE, SDLK_c,
-    SDLK_DOWN, SDLK_e, SDLK_f, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
+    SDLK_d, SDLK_DOWN, SDLK_e, SDLK_f, SDLK_ESCAPE, SDLK_LEFT, SDLK_p, SDLK_r, SDLK_RETURN, SDLK_RIGHT,
     SDLK_s, SDLK_SPACE, SDLK_UP, clear_canvas, close_canvas, delay, get_events,
     hide_lattice, open_canvas, update_canvas,
 )
@@ -46,11 +46,13 @@ def main():
         pending_stairs = 0
         pending_jump = False
         pending_web = False
+        pending_release = False
         pending_attack = False
         accumulator = 0.0
         previous = perf_counter()
         stage_entry = None
         boss_selector = None
+        floor_entry = None   # - 키: 같은 스테이지의 층 번호 입력
 
         while True:
             now = perf_counter()
@@ -145,6 +147,18 @@ def main():
                             stage_entry = None
                     accumulator = 0.0
                     continue
+                if floor_entry is not None:
+                    if key in (SDLK_ESCAPE, canvas.SDLK_MINUS, canvas.SDLK_KP_MINUS):
+                        floor_entry = None
+                    elif key == SDLK_BACKSPACE:
+                        floor_entry = ''
+                    elif SDLK_0 <= key <= SDLK_9:
+                        floor_entry = str(key - SDLK_0)
+                    elif key in (SDLK_RETURN, canvas.SDLK_KP_ENTER) and floor_entry:
+                        if world.warp_to_floor(int(floor_entry) - 1):
+                            floor_entry = None
+                    accumulator = 0.0
+                    continue
                 if key in (canvas.SDLK_PLUS, canvas.SDLK_KP_PLUS, canvas.SDLK_EQUALS):
                     view.toggle_free_camera()
                     pressed.clear()
@@ -159,6 +173,14 @@ def main():
                         pressed.clear()
                     elif key in (SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN):
                         pressed.add(key)
+                    continue
+                if key in (canvas.SDLK_MINUS, canvas.SDLK_KP_MINUS):
+                    floor_entry = ''
+                    pressed.clear()
+                    pending_stairs = 0
+                    pending_jump = False
+                    pending_attack = False
+                    accumulator = 0.0
                     continue
                 if key == SDLK_p:
                     stage_entry = ''
@@ -224,15 +246,20 @@ def main():
                 elif key == SDLK_e and key not in pressed:
                     pressed.add(key)
                     world.toggle_lever()
+                elif key == SDLK_d and key not in pressed:
+                    pressed.add(key)
+                    pending_release = True   # 거미줄에 매달려 있으면 그 자리에서 놓는다
                 elif key == SDLK_f and key not in pressed:
                     pressed.add(key)
+                    if world.recording is not None and world.recording.monster_kind == 'watcher':
+                        pending_web = True   # 외눈 유령 분신: F로 레이더를 켜고 끈다
                 elif SDLK_0 <= key <= SDLK_4:
                     world.select_weapon(key - SDLK_0)
                 elif key in (SDLK_a, SDLK_s) and world.recording is None:
                     pending_attack = 'slash' if key == SDLK_a else 'thrust'
 
             while accumulator >= STEP:
-                if screen == 'play' and stage_entry is None and boss_selector is None:
+                if screen == 'play' and stage_entry is None and boss_selector is None and floor_entry is None:
                     horizontal = int(SDLK_RIGHT in pressed) - int(SDLK_LEFT in pressed)
                     if view.free_camera:
                         vertical = int(SDLK_UP in pressed) - int(SDLK_DOWN in pressed)
@@ -243,7 +270,8 @@ def main():
                         if world.recording is not None and world.recording.monster_kind == 'crawler':
                             stairs = int(SDLK_UP in pressed) - int(SDLK_DOWN in pressed)
                         world.step(Motion(horizontal, stairs, pending_jump, pending_web,
-                                          SDLK_SPACE in pressed, SDLK_f in pressed), pending_attack)
+                                          SDLK_SPACE in pressed, SDLK_f in pressed,
+                                          release=pending_release), pending_attack)
                     next_world = advance_stage_section(world)
                     if next_world is not world:
                         world = next_world
@@ -251,6 +279,7 @@ def main():
                 pending_stairs = 0
                 pending_jump = False
                 pending_web = False
+                pending_release = False
                 pending_attack = False
                 accumulator -= STEP
 
@@ -262,6 +291,8 @@ def main():
                 view.draw_echo_replacement(world)
             if stage_entry is not None:
                 view.draw_stage_selector(stage_entry)
+            if floor_entry is not None:
+                view.draw_floor_selector(floor_entry, world.stage.floors)
             if boss_selector is not None:
                 view.draw_boss_selector(boss_selector)
             update_canvas()

@@ -61,6 +61,33 @@ class JumpBlock:
 
 
 @dataclass(frozen=True)
+class Platform:
+    """공중 발판. 바닥 위 height 높이에 있다. hidden이면 외눈 유령 분신의 레이더로 드러난 동안만 밟힌다."""
+    floor: int
+    left: int
+    right: int
+    height: int
+    hidden: bool = True
+
+
+@dataclass(frozen=True)
+class Switch:
+    """공중 턱 위의 스위치. 분신(녹화 중인 분신 포함)이 그 높이에 올라서면 door가 열린 채로 고정된다."""
+    floor: int
+    x: int
+    height: int
+    door: Point
+
+
+@dataclass(frozen=True)
+class Lens:
+    """렌즈 건축물. 외눈 유령 분신의 레이더 원이 닿으면 그 층의 숨은 발판이 모두 드러난다."""
+    floor: int
+    x: int
+    height: int
+
+
+@dataclass(frozen=True)
 class WebBeam:
     floor: int
     left: int
@@ -149,6 +176,8 @@ ENEMY_KINDS = {
     'warden': EnemyKind('monster_02_stone_warden.png', 92, 220, 48, 60, 105, xp=28, damage_ratio=0.5),
     'watcher': EnemyKind('monster_03_watcher.png', 114, 215, 39, 12, 86, damage=8, xp=12),
     'crawler': EnemyKind('monster_spider.png', 88, 185, 38, 10, 100, damage=7, xp=10),
+    # 층 유령: 정해진 높이에서 좌우로 떠다니며 닿으면 최대 체력의 35% (세 번 닿으면 쓰러진다).
+    'tier_ghost': EnemyKind('monster_03_watcher.png', 60, 0, 30, 8, 70, xp=6, damage_ratio=0.35),
     'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 260, damage=8, xp=80),
     'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
     'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
@@ -170,6 +199,7 @@ class EnemySpawn:
     kind: str
     point: Point
     patrol: tuple[int, int]
+    height: int = 0   # 바닥 위로 떠 있는 높이 (층 유령)
 
 
 @dataclass(frozen=True)
@@ -198,6 +228,12 @@ class Stage:
     jump_blocks: tuple[JumpBlock, ...] = ()  # 점프 맵용. 예: jump_blocks=(JumpBlock(0, 900),)
     poison_zones: tuple[tuple[int, int, int], ...] = ()
     poison_platforms: tuple[tuple[int, int, int], ...] = ()
+    pits: tuple[tuple[int, int, int], ...] = ()   # (층, 왼쪽, 오른쪽). 발판 없이 들어가면 떨어져 죽는다.
+    platforms: tuple[Platform, ...] = ()
+    floor_height: int = 400     # 층 사이 간격. 두 층을 합친 통합방은 800
+    reveal_seconds: float = 10.0  # 외눈 유령 분신이 사라진 뒤 숨은 발판이 보이는 시간
+    switches: tuple[Switch, ...] = ()
+    lens: Lens | None = None
 
 
 STAGES = (
@@ -211,29 +247,55 @@ STAGES = (
             Gate('B', Point(430, 0), Point(1400, 0)),
         ),
         web_beams=(WebBeam(0, 680, 800, 215),
-                   WebBeam(1, 699, 819, 175), WebBeam(1, 882, 1002, 175),
-                   WebBeam(1, 1062, 1182, 175)),
-        poison_zones=((1, 710, 900), (1, 980, 1170)),
-        poison_platforms=((1, 900, 980),),
+                   WebBeam(1, 628, 748, 175), WebBeam(1, 1087, 1207, 175),
+                   WebBeam(1, 1405, 1525, 175)),
+        # 2층: 독 웅덩이 3개 사이에 거미가 쉬어 가는 바닥 2개
+        poison_zones=((1, 518, 885), (1, 1027, 1273), (1, 1355, 1525)),
+        poison_platforms=((1, 885, 1027), (1, 1273, 1355)),
+        # 3층: 가운데 구덩이 위에 보이지 않는 발판이 1~4단 지그재그로 놓여 있다.
+        pits=((2, 540, 1798),),
+        platforms=(
+            Platform(2, 600, 700, 0), Platform(2, 760, 860, 36), Platform(2, 650, 740, 72),
+            Platform(2, 800, 1100, 108), Platform(2, 1180, 1280, 36), Platform(2, 1340, 1420, 72),
+            Platform(2, 1480, 1580, 108), Platform(2, 1660, 1740, 0),
+        ),
         enemies=(
             EnemySpawn('crawler', Point(1100, 0), (1000, 1200)),
             EnemySpawn('crawler', Point(1800, 0), (1700, 1900)),
+            EnemySpawn('watcher', Point(450, 2), (380, 510)),
+            # 단마다 떠다니는 유령. 위 단일수록 빠르고 넓게 돈다.
+            EnemySpawn('tier_ghost', Point(650, 2), (580, 720), height=0),
+            EnemySpawn('tier_ghost', Point(1000, 2), (760, 1280), height=36),
+            EnemySpawn('tier_ghost', Point(1000, 2), (650, 1420), height=72),
+            EnemySpawn('tier_ghost', Point(1200, 2), (800, 1580), height=108),
         ),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
-        '02  사냥꾼의 시야',
-        '뿔짐승을 처치하거나 분신으로 유인한 뒤 아래층을 지나가세요.',
-        3, Point(111, 1), Point(2100, 2),
-        stairs=(Stair(659, 0), Stair(1200, 0)),
-        elevators=(Stair(1950, 1),),
-        enemies=(
-            EnemySpawn('beast', Point(900, 0), (720, 1100)),
-            EnemySpawn('watcher', Point(1650, 1), (1550, 1750)),
+        '02  뿔짐승의 도약',
+        '뿔짐승을 처치해 분신을 얻으세요. 분신으로 Space를 1초 눌러 슈퍼 점프로 발판을 올라 스위치를 누르세요.',
+        2, Point(112, 0), Point(2140, 1),
+        floor_height=800,
+        # [1·2층 통합방] 바닥이 있다. 발판 사이 높이는 90이라 보통 점프(42)로는 못 오르고
+        # 뿔짐승 분신의 슈퍼 점프(100)로만 오른다. 오른쪽 위 턱의 스위치가 아래 잠긴 문을 연다.
+        # [3·4층 통합방] 바닥이 뚫려 있다(떨어지면 죽는다). 발판은 숨어 있고, 외눈 유령 분신의
+        # 레이더가 오른쪽 렌즈에 닿으면 모두 드러난다. 왼쪽 위 턱의 스위치가 출구 문을 연다.
+        platforms=(
+            Platform(0, 550, 650, 90, False), Platform(0, 740, 840, 180, False),
+            Platform(0, 930, 1030, 270, False), Platform(0, 760, 860, 360, False),
+            Platform(0, 950, 1050, 450, False), Platform(0, 1130, 1230, 540, False),
+            Platform(0, 1320, 1880, 630, False),
+            Platform(1, 1650, 1750, 90), Platform(1, 1460, 1560, 180), Platform(1, 1270, 1370, 270),
+            Platform(1, 1080, 1180, 360), Platform(1, 890, 990, 450), Platform(1, 700, 800, 540),
+            Platform(1, 200, 610, 630),
         ),
-        walls=(Point(900, 1),),
-        watch_gate=WatchGate(Point(1300, 0), Point(1800, 1)),
-        echo_seconds=MAX_RECORD_SECONDS,
+        pits=((1, 48, 1820),),
+        switches=(Switch(0, 1820, 630, Point(1790, 0)), Switch(1, 300, 630, Point(2060, 1))),
+        lens=Lens(1, 1990, 230),
+        elevators=(Stair(1900, 0),),
+        enemies=(EnemySpawn('beast', Point(520, 0), (420, 700)),),
+        reveal_seconds=25.0,
+        echo_seconds=20,   # 발판 일곱 번을 슈퍼 점프(1초 모으기)로 오르려면 10초로는 모자라다
     ),
     Stage(
         '03  간수의 다섯 층',

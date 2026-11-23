@@ -1,4 +1,5 @@
 import json
+import sdl2
 from copy import copy
 from ctypes import byref, c_int
 from math import cos, sin
@@ -16,6 +17,13 @@ import late_monster_motion
 from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
 from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
+from poison_fx import PoisonFx
+from stage1_pixel import PixelBackdrop
+import pixel_sprites
+from pixel_sprites import PixelSprites
+from hero_sprite import HeroSprite
+import monster_sprite
+from monster_sprite import MonsterSprite
 from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
@@ -95,6 +103,7 @@ def text_width(font, text):
 
 MONSTER_NAMES = {
     'beast': '뿔짐승', 'warden': '돌 수호자', 'watcher': '외눈 유령', 'crawler': '거미',
+    'tier_ghost': '떠도는 유령',
     'jailer_boss': '쇠사슬 간수', 'magic_book': '마법책', 'potion_slime': '물약 슬라임',
     'magic_armor': '마법 갑옷', 'magic_armor_guard': '갑옷 경비병', 'witch': '마녀', 'grand_witch': '대마녀',
     'echo_knight': '뒤틀린 잔향의 기사', 'time_thief': '시간 도둑',
@@ -133,6 +142,10 @@ class View:
         self.free_camera_x = 0.0
         self.camera_x = 0.0
         self.camera_y = 0.0
+        self.floor_view_texture = None
+        self.last_floor = None
+        self.floor_transition_at = 0.0
+        self.camera_lift = 0.0   # 통합방에서 화면을 위로 올린 거리 (층별 화면 자르기에도 쓴다)
         self.shake_base = None
         self.stage_started_at = 0.0
         self.background = load_asset('dungeon.png')
@@ -168,6 +181,16 @@ class View:
             for index, count in enumerate(floor_counts)
         }
         self.floor_images[0][1] = load_asset('층별맵/구간01_2층_조각상.png')
+        self.stage1_pixel_image = load_asset('층별맵/1스테이지_감옥_고화질.png')
+        sdl2.SDL_SetTextureScaleMode(self.stage1_pixel_image.texture, sdl2.SDL_ScaleModeLinear)
+        self.stage1_second_floor = load_asset('층별맵/1스테이지_2층_수로배경.png')
+        sdl2.SDL_SetTextureScaleMode(self.stage1_second_floor.texture, sdl2.SDL_ScaleModeLinear)
+        self.beast_jump_backgrounds = (
+            load_asset('층별맵/2스테이지_뿔짐승_도약실.png'),
+            load_asset('층별맵/2스테이지_숨겨진_관측실.png'),
+        )
+        for background in self.beast_jump_backgrounds:
+            sdl2.SDL_SetTextureScaleMode(background.texture, sdl2.SDL_ScaleModeLinear)
         self.floor_arenas = {
             index: load_asset(f'층별맵/구간{index + 1:02d}_보스방.png')
             for index in (2, 5, 8)
@@ -178,12 +201,22 @@ class View:
             data = json.loads((ASSETS / 'wizard_castle' / f'{name}.json').read_text(encoding='utf-8'))
             self.wizard_fx[name] = (load_asset(f'wizard_castle/{name}.png'), data)
         self.plate_art = load_asset('dungeon_props/pressure-plate.png')
-        self.torch_art = load_asset('dungeon_props/wall-torch-32px-strip8.png')
         self.gate_art = load_asset('dungeon_props/portcullis.png')
         self.web_beam_art = load_asset('dungeon_props/spider_web_beam.png')
+        self.pixel_statue_art = load_asset('1스테이지_굵은도트_가고일.png')
+        sdl2.SDL_SetTextureScaleMode(self.pixel_statue_art.texture, sdl2.SDL_ScaleModeNearest)
+        self.statue_chain_art = load_asset('1스테이지_조각상_쇠사슬.png')
+        sdl2.SDL_SetTextureScaleMode(self.statue_chain_art.texture, sdl2.SDL_ScaleModeNearest)
         self.poison_art = load_asset('1스테이지_독구간.png')
-        self.poison_pit_art = load_asset('1스테이지_독웅덩이_돌구조물.png')
-        self.poison_deep_art = load_asset('1스테이지_깊은_독물.png')
+        self.poison_rest_art = load_asset('2층_수로_돌발판.png')
+        self.poison_wall_art = load_asset('2층_수로_돌벽.png')
+        self.poison_fx = PoisonFx()
+        self.pixel_backdrop = PixelBackdrop()
+        self.pixel_sprites = PixelSprites()   # 1스테이지 장식물 도트
+        self.hero_sprite = HeroSprite(load_asset)   # 1스테이지 도트 주인공 (보라 망토)
+        self.monster_sprite = MonsterSprite(load_asset)   # 1스테이지 도트 거미·외눈 유령
+        self.stage1_folder_monsters = monster_sprite.StageOneFolderMonsters(load_asset)
+        self.gate_lift = {}                   # 문 창살이 올라간 정도 (0~1)
         self.exit_art = load_asset('dungeon_props/exit-portal.png')
         self.ladder_art = load_asset('dungeon_props/ladder.png')
         self.lever_art = load_asset('dungeon_props/lever.png')
@@ -257,6 +290,7 @@ class View:
                           cell_w, round(cell_h * 0.65))
                          for row in range(2) for column in range(4)]
         self.enemy_walk['crawler'] = WalkCycle(spider, spider_frames, 70, 9)
+        self.enemy_walk['tier_ghost'] = self.enemy_walk['watcher']
         for name, asset in (
             ('jailer_boss', 'prison-jailer-boss'), ('magic_armor', 'magic-armor'),
             ('magic_armor_guard', 'magic-armor'),
@@ -292,6 +326,8 @@ class View:
         self.free_camera = not self.free_camera
         if self.free_camera:
             self.free_camera_x = self.camera_x
+            if self.current_world is not None:
+                self.move_free_camera(self.current_world, 0, 0, 0)
         self.camera_updated_at = perf_counter()
 
     def move_free_camera(self, world, horizontal, vertical, elapsed):
@@ -299,7 +335,11 @@ class View:
             return
         speed = 700
         self.free_camera_x = min(WIDTH, max(0, self.free_camera_x + horizontal * speed * elapsed))
-        maximum_y = max(0, (world.stage.floors - 1) * 410)
+        if world.stage.floor_height > 400:
+            maximum_y = ((world.stage.floors - 1) * world.stage.floor_height
+                         + world.stage.floor_height - 465)
+        else:
+            maximum_y = max(0, (world.stage.floors - 1) * 410)
         self.camera_y = min(maximum_y, max(0, self.camera_y + vertical * speed * elapsed))
 
     def draw(self, world, screen, menu=None):
@@ -313,24 +353,75 @@ class View:
             self.stage_started_at = perf_counter()
             self.camera_y = 0.0
             self.camera_updated_at = perf_counter()
+            self.last_floor = None
         focus = world.recording.preview if world.recording else world.player
+        single_floor = not self.free_camera and world.stage.floors > 1
+        if single_floor:
+            if self.last_floor is not None and self.last_floor != focus.floor:
+                self.floor_transition_at = perf_counter()
+            self.last_floor = focus.floor
+            if self.floor_view_texture is None:
+                self.floor_view_texture = sdl2.SDL_CreateTexture(
+                    canvas.renderer, sdl2.SDL_PIXELFORMAT_RGBA8888,
+                    sdl2.SDL_TEXTUREACCESS_TARGET, WIDTH, HEIGHT)
+                if not self.floor_view_texture:
+                    raise RuntimeError('층별 화면을 만들 수 없습니다.')
+            sdl2.SDL_SetRenderTarget(canvas.renderer, self.floor_view_texture)
+            sdl2.SDL_SetRenderDrawColor(canvas.renderer, 7, 14, 27, 255)
+            sdl2.SDL_RenderClear(canvas.renderer)
         self.camera_x = self.free_camera_x if self.free_camera else min(WIDTH, max(0, focus.x - WIDTH * 0.60))
+        if world.stage.floor_height == 400:
+            self.camera_lift = 0.0
         if world.index in (0, 1, 3, 4):
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
-            target = 400 * (focus.floor + focus.elevator_offset)
+            gap = world.stage.floor_height
+            if gap > 400 and focus.elevator_target is None:
+                # 두 층을 합친 통합방: 캐릭터가 올라가면 화면도 위로 따라간다.
+                self.camera_lift = max(0.0, min(gap - 360.0, focus.jump_height - 100))
+            target = gap * (focus.floor if single_floor else focus.floor + focus.elevator_offset) + self.camera_lift
             if not self.free_camera:
-                self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
-            self.floor_y = tuple(160 + floor * 400 - self.camera_y
+                self.camera_y = target if single_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+            self.floor_y = tuple(160 + floor * gap - self.camera_y
                                  for floor in range(world.stage.floors))
-            if world.index in (0, 1):
+            if world.index == 0:
                 for floor, floor_y in enumerate(self.floor_y):
-                    corridor = self.floor_images[world.index][floor]
-                    bottom = floor_y - (corridor.h - 773) * 400 / corridor.h
-                    draw_region(corridor, (0, 0, corridor.w, corridor.h),
-                                -self.camera_x, bottom, WIDTH * 2, 400)
+                    image = self.stage1_second_floor if floor == 1 else self.stage1_pixel_image
+                    floor_row = round(image.h * (600 if floor == 1 else 610) / 724)
+                    draw_region(image, (0, 0, image.w, floor_row),
+                                -self.camera_x, floor_y, WIDTH * 2, 308)
+                    holes = sorted((left, right) for level, left, right
+                                   in (*world.stage.pits, *world.stage.poison_zones) if level == floor)
+                    start = 0
+                    for left, right in (*holes, (WIDTH * 2, WIDTH * 2)):
+                        end = min(WIDTH * 2, left)
+                        if end > start:
+                            source_left = round(start * image.w / (WIDTH * 2))
+                            source_right = round(end * image.w / (WIDTH * 2))
+                            draw_region(image, (source_left, floor_row, source_right - source_left,
+                                                image.h - floor_row), start - self.camera_x,
+                                        floor_y - 92, end - start, 92)
+                        start = max(start, right)
+            elif world.index == 1:
+                for floor, floor_y in enumerate(self.floor_y):
+                    background = self.beast_jump_backgrounds[floor]
+                    wall_height = background.h - 20 if floor == 0 else background.h
+                    draw_region(background, (0, 0, background.w, wall_height),
+                                -self.camera_x, floor_y, WIDTH * 2, gap)
+                    floor_image = self.stage1_pixel_image
+                    floor_row = round(floor_image.h * 610 / 724)
+                    holes = sorted((left, right) for level, left, right in world.stage.pits if level == floor)
+                    start = 0
+                    for left, right in (*holes, (WIDTH * 2, WIDTH * 2)):
+                        end = min(WIDTH * 2, left)
+                        if end > start:
+                            sx = round(start * floor_image.w / (WIDTH * 2))
+                            ex = round(end * floor_image.w / (WIDTH * 2))
+                            draw_region(floor_image, (sx, floor_row, ex - sx, floor_image.h - floor_row),
+                                        start - self.camera_x, floor_y - 92, end - start, 92)
+                        start = max(start, right)
             else:
                 for floor, floor_y in enumerate(self.floor_y):
                     corridor = self.floor_images[world.index][floor]
@@ -351,14 +442,14 @@ class View:
                       (690 - 228) * scale_y + 400,
                       (690 - 228) * scale_y + 400 + (690 - 455) * scale_y)
             floor = focus.floor
-            offset = focus.elevator_offset
+            offset = 0 if single_floor else focus.elevator_offset
             target = levels[floor]
             if offset > 0 and floor + 1 < len(levels):
                 target += offset * (levels[floor + 1] - levels[floor])
             elif offset < 0 and floor > 0:
                 target += offset * (levels[floor] - levels[floor - 1])
             if not self.free_camera:
-                self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+                self.camera_y = target if single_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + level - self.camera_y for level in levels[:world.stage.floors])
             bottom = self.floor_y[0] - (image.h - 690) * scale_y
             rows = ((455, 724), (228, 455), (0, 228))
@@ -383,9 +474,9 @@ class View:
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
             self.camera_updated_at = now
             lift_offset = world.lift_progress if world.index == 5 and world.lift_riding and focus is world.player else 0
-            target = 400 * (focus.floor + focus.elevator_offset + lift_offset)
+            target = 400 * (focus.floor if single_floor else focus.floor + focus.elevator_offset + lift_offset)
             if not self.free_camera:
-                self.camera_y += max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+                self.camera_y = target if single_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + floor * 400 - self.camera_y for floor in range(5))
             if world.index == 2:
                 for floor in range(4):
@@ -448,12 +539,6 @@ class View:
             edge = 38 if world.stage.floors > 1 else 0
             draw_region(image, (edge, 0, image.w - edge * 2, image.h),
                         -self.camera_x, 0, WIDTH * 2, HEIGHT)
-        if world.index == 0:
-            frame = int(world.time * 10) % 8
-            for floor_y in self.floor_y:
-                for x in (560, 1680):
-                    draw_region(self.torch_art, (frame * 32, 0, 32, 32),
-                                x - self.camera_x - 36, floor_y + 165, 72, 72)
         self.animation_time = world.time
         for i in range(24):
             x = (i * 137 + world.time * (7 + i % 4)) % (RIGHT + 48) - self.camera_x
@@ -461,6 +546,18 @@ class View:
             box(x, y, x + 2, y + 2, (118, 174, 187))
         self._draw_map(world)
         self._draw_characters(world)
+        if single_floor:
+            sdl2.SDL_SetRenderTarget(canvas.renderer, None)
+            floor_y = self.floor_y[focus.floor] + self.camera_lift
+            source = sdl2.SDL_Rect(0, round(HEIGHT - (floor_y + 308)), WIDTH, 400)
+            destination = sdl2.SDL_Rect(0, 95, WIDTH, 521)
+            sdl2.SDL_RenderCopy(canvas.renderer, self.floor_view_texture, source, destination)
+            if focus.elevator_target is not None:
+                fade = max(0.0, (abs(focus.elevator_offset) - 0.65) / 0.35)
+            else:
+                fade = max(0.0, 1.0 - (perf_counter() - self.floor_transition_at) / 0.3)
+            if fade > 0:
+                box(0, 104, WIDTH, 625, (7, 14, 27, round(220 * fade)))
         self._draw_hud(world)
         if self.free_camera:
             box(345, 587, 775, 620, INK)
@@ -765,14 +862,21 @@ class View:
             low, high = self.floor_y[elevator.lower], self.floor_y[elevator.lower + 1]
             line(x - 27, low, x - 27, high + 75, GOLD)
             line(x + 27, low, x + 27, high + 75, GOLD)
+            pixel = world.index == 0
             for floor, y, direction in ((elevator.lower, low, '↑'), (elevator.lower + 1, high, '↓')):
-                self._draw_puzzle_prop('lift_platform', x, y - 18, 70, 24)
+                if pixel:
+                    self.pixel_sprites.blit(self.pixel_sprites.prop(('lift',), pixel_sprites.draw_lift), x, y - 16, 1)
+                else:
+                    self._draw_puzzle_prop('lift_platform', x, y - 18, 70, 24)
                 self.small.draw(x - 22, y + 22, f'{direction} 승강', GOLD)
             for actor in (world.player, world.echo.actor if world.echo else None,
                           world.recording.preview if world.recording else None):
                 if actor and actor.elevator_target is not None and abs(actor.x - elevator.x) < 1 and min(actor.floor, actor.elevator_target) == elevator.lower:
                     y = self._actor_floor_y(actor)
-                    self._draw_puzzle_prop('lift_platform', x, y - 18, 70, 24)
+                    if pixel:
+                        self.pixel_sprites.blit(self.pixel_sprites.prop(('lift',), pixel_sprites.draw_lift), x, y - 16, 1)
+                    else:
+                        self._draw_puzzle_prop('lift_platform', x, y - 18, 70, 24)
 
         for stair in stage.stairs:
             x = stair.x - self.camera_x
@@ -789,6 +893,50 @@ class View:
             for offset in range(12, 120, 15):
                 line(x - GATE_HALF_WIDTH, y + offset, x + GATE_HALF_WIDTH, y + offset, LINE)
 
+        # 그레이박스: 구덩이, 숨은 발판, 외눈 유령 분신의 레이더. 구조가 정해지면 그림으로 바꾼다.
+        for floor, left, right in stage.pits:
+            y = self.floor_y[floor]
+            box(left - self.camera_x, y - 90, right - self.camera_x, y + 2, (8, 6, 16))
+        for index, platform in enumerate(stage.platforms):
+            if not world.platform_visible(index):
+                continue
+            y = self.floor_y[platform.floor] + platform.height
+            left, right = platform.left - self.camera_x, platform.right - self.camera_x
+            # 숨은 발판은 보라색, 늘 보이는 점프맵 발판은 돌색
+            fill, edge = ((124, 82, 178), (214, 176, 255)) if platform.hidden else ((88, 92, 112), (150, 156, 178))
+            box(left, y - 10, right, y, fill)
+            box(left, y - 10, right, y, edge, filled=False)
+        if stage.lens is not None:
+            # 렌즈 건축물: 놋쇠 테 안의 유리. 켜지면 청록 빛이 방 전체로 퍼진다.
+            lens = stage.lens
+            x, y = lens.x - self.camera_x, self.floor_y[lens.floor] + lens.height
+            box(x - 4, self.floor_y[lens.floor], x + 4, y - 18, (96, 80, 60))
+            self._disc(x, y, 20, (150, 118, 64))
+            self._disc(x, y, 14, (110, 240, 230) if world.lens_lit else (60, 84, 110))
+            if world.lens_lit:
+                for i in range(8):
+                    a = i / 8 * 6.2832 + world.time
+                    line(x + 22 * cos(a), y + 22 * sin(a), x + 60 * cos(a), y + 60 * sin(a), CYAN)
+            self.small.draw(x - 14, y + 30, '렌즈', CYAN if world.lens_lit else GOLD)
+        for switch, on in zip(stage.switches, world.switched):
+            # 공중 턱의 스위치와 그것이 여는 잠긴 문
+            sx, sy = switch.x - self.camera_x, self.floor_y[switch.floor] + switch.height
+            draw_grounded(self.lever_art, LEVER_FRAMES[on], sx, sy, 34)
+            self.small.draw(sx - 22, sy + 45, '스위치', CYAN if on else GOLD)
+            dx, dy = switch.door.x - self.camera_x, self.floor_y[switch.door.floor]
+            draw_grounded(self.gate_art, GATE_FRAMES[on], dx, dy, 112)
+            self.small.draw(dx - 22, dy + 124, '열린 문' if on else '잠긴 문', CYAN if on else GOLD)
+        for actor in world._watchers():
+            if actor.radar and actor.elevator_target is None:
+                x = actor.x - self.camera_x
+                y = self._actor_floor_y(actor) + actor.jump_height + 55
+                points, colors = [], []
+                for i in range(32):
+                    a, b = i / 32 * 6.2832, (i + 1) / 32 * 6.2832
+                    points += [(x, y), (x + 220 * cos(a), y + 220 * sin(a)), (x + 220 * cos(b), y + 220 * sin(b))]
+                    colors += [(255, 244, 170, 70), (255, 244, 170, 18), (255, 244, 170, 18)]
+                self._polygon(points, colors)
+
         for block in stage.jump_blocks:
             # 점프 블록: 쌓인 돌 더미. 윗면 금색 선이 넘어야 하는 높이다.
             y = self.floor_y[block.floor]
@@ -801,27 +949,52 @@ class View:
                 line(x - half + 10 + shift, y + offset - 14, x - half + 10 + shift, y + offset, (34, 30, 40))
             line(x - half, y + block.height, x + half, y + block.height, GOLD)
 
-        for floor, left, right in stage.poison_zones[:1]:
-            right = stage.poison_zones[-1][2]
-            x = left - self.camera_x
-            y = self.floor_y[floor]
-            box(x, y - 92, right - self.camera_x, y + 3, (12, 20, 30))
-            pit = self.poison_pit_art
-            draw_region(pit, (0, 0, pit.w, pit.h), x - 45, y - 95,
-                        right - left + 90, 100)
-            image = self.poison_deep_art
-            draw_region(image, (0, 0, image.w, image.h), x, y - 95, right - left, 112)
-
-        for floor, left, right in stage.poison_platforms:
-            pit = self.poison_pit_art
-            draw_region(pit, (0, 45, 340, 120), left - self.camera_x,
-                        self.floor_y[floor] - 20, right - left, 25)
+        if stage.poison_zones:
+            # 독 웅덩이는 이미지 없이 4px 도트로 찍는다 (poison_fx.py).
+            if world.index == 0:
+                for floor in sorted({zone[0] for zone in stage.poison_zones}):
+                    zones = [zone for zone in stage.poison_zones if zone[0] == floor]
+                    y = self.floor_y[floor]
+                    box(min(z[1] for z in zones) - self.camera_x, y - 92,
+                        max(z[2] for z in zones) - self.camera_x, y, (12, 22, 12))
+            self.poison_fx.draw_pool(stage.poison_zones, stage.poison_platforms,
+                                     self.floor_y, self.camera_x, world.time,
+                                     draw_stone=world.index != 0)
+            if world.index == 0:
+                for floor in sorted({zone[0] for zone in stage.poison_zones}):
+                    zones = [zone for zone in stage.poison_zones if zone[0] == floor]
+                    left, right = min(z[1] for z in zones), max(z[2] for z in zones)
+                    y = self.floor_y[floor]
+                    wall = self.poison_wall_art
+                    for x in (left - 16, right):
+                        draw_region(wall, (250, 200, 500, 1180), x - self.camera_x,
+                                    y - 92, 16, 92)
+                    for level, start, end in stage.poison_platforms:
+                        if level == floor:
+                            art = self.poison_rest_art
+                            draw_region(art, (0, 250, art.w, 255), start - self.camera_x,
+                                        y - 26, end - start, 28)
+            self.poison_fx.draw(stage.poison_zones, self.floor_y, self.camera_x, world.time,
+                                [world.player, *world.echo_actors()])
 
         for beam in stage.web_beams:
             image = self.web_beam_art
             scale = 0.85 if world.index == 0 and beam.floor == 1 else 1.0
             width = (beam.right - beam.left) * scale
             left = (beam.left + beam.right - width) / 2 - self.camera_x
+            if world.index == 0:
+                height = beam.height * scale
+                sprite_width = height
+                if beam.floor in (0, 1):
+                    chain_bottom = self.floor_y[beam.floor] + beam.underside + height - 4
+                    chain_top = self.floor_y[beam.floor] + 308
+                    if chain_top > chain_bottom:
+                        draw_region(self.statue_chain_art, (400, 0, 224, self.statue_chain_art.h),
+                                    left + width / 2 - 5, chain_bottom, 10, chain_top - chain_bottom)
+                draw_region(self.pixel_statue_art, (0, 0, self.pixel_statue_art.w, self.pixel_statue_art.h),
+                            left + (width - sprite_width) / 2,
+                            self.floor_y[beam.floor] + beam.underside, sprite_width, height)
+                continue
             draw_region(image, (0, 0, image.w, image.h), left,
                         self.floor_y[beam.floor] + beam.underside,
                         width, beam.height * scale)
@@ -830,8 +1003,8 @@ class View:
             px, py = gate.plate.x - self.camera_x, self.floor_y[gate.plate.floor]
             gx, gy = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
             draw_grounded(self.plate_art, PLATE_FRAMES[state.pressed], px, py, 13)
-            self.small.draw(px - 23, py - 12, f'{gate.label} 발판', CYAN if state.pressed else GOLD)
             draw_grounded(self.gate_art, GATE_FRAMES[state.open], gx, gy, 112)
+            self.small.draw(px - 23, py - 12, f'{gate.label} 발판', CYAN if state.pressed else GOLD)
             box(gx - 21, gy + 114, gx + 21, gy + 134, PANEL)
             self.small.draw(gx - 15, gy + 124, f'{gate.label} 문', CYAN if state.open else GOLD)
             if gate.lever is not None:
@@ -840,7 +1013,12 @@ class View:
                 self.small.draw(lx - 20, ly + 45, 'E 레버', CYAN if state.latched else GOLD)
 
         x, y = stage.exit.x - self.camera_x, self.floor_y[stage.exit.floor]
-        draw_grounded(self.exit_art, EXIT_FRAME, x, y, 105)
+        if world.index == 0:
+            frame = int(world.time * 8) % 6
+            self.pixel_sprites.blit(self.pixel_sprites.prop(('exit', frame), lambda: pixel_sprites.draw_exit(frame)),
+                                    x, y, 1)
+        else:
+            draw_grounded(self.exit_art, EXIT_FRAME, x, y, 105)
         locked = any(enemy.spawn.kind in BOSS_KINDS for enemy in world.enemies)
         self.small.draw(x - 35 if locked else x - 15, y + 116,
                         '보스 처치 필요' if locked else '출구', RED if locked else CYAN)
@@ -882,7 +1060,7 @@ class View:
             screen_enemy = copy(enemy)
             screen_enemy.actor = self._screen_actor(enemy.actor)
             kind = ENEMY_KINDS[enemy.spawn.kind]
-            y = self.floor_y[enemy.actor.floor]
+            y = self.floor_y[enemy.actor.floor] + enemy.actor.jump_height
             x = screen_enemy.actor.x
             feet = 0.30 if enemy.spawn.kind in ('beast', 'crawler') else 0.47
             tint = (255, 166, 156) if enemy.flash > 0 else (255, 255, 255)
@@ -890,7 +1068,10 @@ class View:
             skill_phase = boss_skills.phase(enemy)
             if skill_phase is not None:
                 pose = skill_pose(enemy.spawn.kind, *skill_phase)
-            if enemy.spawn.kind == 'echo_knight':
+            if world.index == 0 and enemy.spawn.kind in monster_sprite.KINDS:
+                self.stage1_folder_monsters.draw(enemy.spawn.kind, screen_enemy.actor, y, world.time,
+                                                enemy.windup, enemy.recovery, tint=tint)
+            elif enemy.spawn.kind == 'echo_knight':
                 self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
                 if skill_phase is None and pose is not None:
                     draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
@@ -995,7 +1176,12 @@ class View:
             floors[lower] += (floors[lower + 1] - floors[lower]) * world.lift_progress
             self.floor_y = tuple(floors)
         floor = self._actor_floor_y(world.player) + world.player.jump_height
-        if world.attack_flash > 0:
+        if world.index == 0:
+            attack = None
+            if world.attack_flash > 0:
+                attack = (world.attack_kind, 1 - world.attack_flash / world.attack_duration)
+            self.hero_sprite.draw(player, floor, world.weapon_index, player_alpha, world.time, attack)
+        elif world.attack_flash > 0:
             # 공격 중에는 player_attack.py의 키프레임대로 몸을 내디디고 무기를 움직인다.
             progress = 1 - world.attack_flash / world.attack_duration
             body = copy(player)
@@ -1034,6 +1220,11 @@ class View:
     def _draw_selected_echo(self, actor, monster_kind, opacity=228):
         world_actor = actor
         actor = self._screen_actor(actor)
+        pixel = self.current_world is not None and self.current_world.index == 0
+        if pixel and monster_kind is None:
+            self.hero_sprite.draw(actor, self._actor_floor_y(actor) + actor.jump_height,
+                                  2, opacity, self.animation_time, echo=True)
+            return
         if monster_kind is None or monster_kind not in self.monster_echo_walk:
             self._avatar(self.echo, self.echo_walk, actor, opacity=255)
             return
@@ -1043,9 +1234,11 @@ class View:
             width, height = image.w // 4, image.h // 2
             frame = (min(2, int(actor.beast_charge * 3)) if actor.beast_charge_active
                      else 3 + min(4, int(actor.jump_time / actor.jump_duration * 5)))
+            foot_rows = (350, 349, 347, 350, 312, 254, 320, 360)
+            foot_offset = 115 * (443 - foot_rows[frame]) / 443
             canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
             draw_region(image, ((frame % 4) * width, (frame // 4) * height, width, height),
-                        actor.x - 57.5, floor, 115, 115, actor.facing != -1)
+                        actor.x - 57.5, floor - foot_offset, 115, 115, actor.facing != -1)
             canvas.SDL_SetTextureAlphaMod(image.texture, 255)
             return
         if monster_kind == 'crawler' and actor.web_time > 0 and not actor.web_flying:
@@ -1067,10 +1260,18 @@ class View:
                 line(actor.x + (tx - actor.x) * a, floor + 34 + (ty - floor - 34) * a,
                      actor.x + (tx - actor.x) * b, floor + 34 + (ty - floor - 34) * b, color)
             box(tx - 4, ty - 4, tx + 4, ty + 4, color)
+        if pixel and monster_kind in monster_sprite.KINDS:
+            self.monster_sprite.draw(monster_kind, actor, floor, self.animation_time,
+                                     opacity=opacity, echo=True)
+            return
         faces = 1 if monster_kind == 'broken_jester' else -1
         walk = self.monster_echo_walk[monster_kind]
         # 거미 시트의 발 아래 투명 여백만큼 내려 바닥에 발을 맞춘다.
         draw_floor = floor - walk.draw_height * 0.21 if monster_kind == 'crawler' else floor
+        if monster_kind == 'beast':
+            frame = int(actor.walk_distance / walk.stride_per_frame) % len(walk.frames)
+            foot_rows = (350, 349, 348, 348, 340, 345, 349, 350)
+            draw_floor -= walk.draw_height * (443 - foot_rows[frame]) / 443
         walk.draw(actor, draw_floor, opacity=opacity, faces=faces)
 
     def _draw_echo_knight(self, enemy, floor_y, size, skill_phase, tint):
@@ -1258,6 +1459,10 @@ class View:
         line(28, 103, WIDTH - 28, 103, LINE)
         if world.message_time > 0:
             self.body.draw((WIDTH - text_width(self.body, world.message)) / 2, 52, world.message, GOLD)
+        if world.revealed and world.reveal_time < world.stage.reveal_seconds:
+            label = f'발판 사라지기까지 {world.reveal_time:.1f}초'
+            self.body.draw((WIDTH - text_width(self.body, label)) / 2, 150, label,
+                           RED if world.reveal_time < 3 else GOLD)
         if world.recording is not None and world.recording.monster_kind in MONSTER_NAMES:
             # C로 몬스터 분신을 녹화하는 동안은 어떤 분신인지만 작게 보여 준다.
             label = f'C  {MONSTER_NAMES[world.recording.monster_kind]} 분신'
@@ -1615,6 +1820,17 @@ class View:
         if entry and not 1 <= int(entry) <= len(STAGE_GROUPS):
             self.small.draw(335, 300, '범위 안의 번호를 입력하세요.', RED)
         self.small.draw(335, 255, 'Enter 이동   Backspace 지우기   Esc 취소', GOLD)
+
+    def draw_floor_selector(self, entry, floors):
+        box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))
+        box(300, 225, 820, 495, INK)
+        box(300, 225, 820, 495, LINE, filled=False)
+        self.heading.draw(335, 452, '층 바로 이동', WHITE)
+        self.body.draw(335, 401, f'이동할 층을 입력하세요 (1~{floors})', MUTED)
+        self.display.draw(335, 340, f'{entry}층' if entry else '_', CYAN)
+        if entry and not 1 <= int(entry) <= floors:
+            self.small.draw(335, 300, '이 스테이지에 없는 층입니다.', RED)
+        self.small.draw(335, 255, 'Enter 이동   Backspace 지우기   Esc 또는 - 취소', GOLD)
 
     def _card(self, title, subtitle, description, action):
         box(0, 0, WIDTH, HEIGHT, (2, 8, 17, 188))

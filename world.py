@@ -22,7 +22,8 @@ ELEVATOR_DURATION = 0.8
 ENEMY_CHASE_MARGIN = 400
 ECHO_DAMAGE_RATIO = 0.30
 ECHO_INVULNERABILITY = 0.92
-# 거미줄 그네 (거미 분신 전용). F로 붙이고 ←→로 반동, ↑↓로 줄을 감고 풀고, F나 Space로 놓는다.
+# 거미줄 그네 (거미 분신 전용). F로 붙이고 ←→로 반동, ↑↓로 줄을 감고 풀고,
+# Space로 흔들리던 속도 그대로 날아가며 놓거나 D로 그 자리에서 놓는다. 매달린 채 F를 다시 쏘면 새 지점에 옮겨 붙는다.
 SPIDER_WEB_TOP = 150       # 거미줄을 붙이는 천장 높이 (바닥 위)
 SPIDER_WEB_REACH = 90      # 바라보는 쪽으로 이만큼 앞에 붙인다
 SPIDER_GRAVITY = 1400      # px/s²
@@ -37,6 +38,10 @@ SPIDER_MAX_ANGLE = 1.35    # 줄이 수직에서 벌어질 수 있는 최대 각
 SPIDER_OVER_HEIGHT = 125   # 이 높이 이상이면 문과 벽 위로 넘어간다
 SPIDER_DOOR_CLIMB_DURATION = 1.2
 SPIDER_DOOR_CLIMB_HEIGHT = 145
+FALL_GRAVITY = 820         # 보통 점프(높이 42, 0.64초)와 같은 중력
+PIT_DEPTH = 90             # 구덩이로 이만큼 떨어지면 죽는다
+RADAR_RANGE = 220          # 외눈 유령 분신의 눈에서 발판이 드러나는 거리
+RADAR_EYE = 55             # 발밑에서 눈까지의 높이
 
 
 @dataclass
@@ -72,6 +77,9 @@ class Actor:
     door_climb_start: float = 0.0
     door_climb_end: float = 0.0
     spider_up_latched: bool = False
+    base: float = 0.0             # 서 있는 발판의 높이. 구덩이로 떨어지면 음수가 된다.
+    fall_speed: float = 0.0
+    radar: bool = False           # 외눈 유령 분신의 레이더 (F)
 
     @property
     def elevator_offset(self):
@@ -86,9 +94,9 @@ class Actor:
         if self.web_time > 0:
             return self.web_height
         if self.jump_time <= 0:
-            return 0.0
+            return self.base
         progress = min(1.0, self.jump_time / self.jump_duration)
-        return 4 * self.jump_peak * progress * (1 - progress)
+        return self.base + 4 * self.jump_peak * progress * (1 - progress)
 
     @classmethod
     def at(cls, point: Point, facing: int = 1):
@@ -104,6 +112,7 @@ class Motion:
     jump_held: bool = False
     web_aiming: bool = False
     aim_x: int | None = None   # 녹화된 발사 방향 (-1, 0, 1). 재현은 조준 없이 이 방향으로 쏜다.
+    release: bool = False      # D: 거미줄을 그 자리에서 놓는다
 
 
 @dataclass
@@ -173,6 +182,11 @@ class World:
             health = ENEMY_KINDS[spawn.kind].health
             health = None if health is None else round(health * self.stage.enemy_scale)
             self.enemies.append(Enemy(spawn, Actor.at(spawn.point, -1), health, health))
+            self.enemies[-1].actor.base = spawn.height
+        self.revealed = set()   # 레이더로 드러난 숨은 발판 번호
+        self.lens_lit = False   # 렌즈가 켜져 그 층 발판이 모두 드러났는가
+        self.switched = [False] * len(self.stage.switches)   # 눌려 문이 열린 스위치
+        self.reveal_time = 0.0  # 외눈 유령 분신이 사라진 뒤 남은 공개 시간
         self.health = self.max_health
         self.damage_texts = []  # 맞은 자리에 뜨는 피해 숫자 [x, 층, 지난 시간, 글자, 본체가 맞았는가]
         self.weapon_index = weapon_index
@@ -279,6 +293,9 @@ class World:
 
     def start_recording(self, monster_kind: str | None = None):
         self.echo_selecting = False
+        if self.player.base != 0 or self.player.fall_speed:
+            self.notify('바닥에 내려선 뒤 분신 녹화를 시작하세요.')
+            return
         if self.recording is None:
             # 녹화용 분신을 만들기 전에 기존 재현 분신을 없애 한 명만 유지한다.
             self._remove_echo()
@@ -293,7 +310,7 @@ class World:
         return self.pending_monster_echoes[0] if self.pending_monster_echoes else None
 
     def offer_monster_echo(self, kind):
-        if kind in BOSS_KINDS:
+        if kind in BOSS_KINDS or kind == 'tier_ghost':
             return
         # The guard and regular armor share the same monster form.
         kind = 'magic_armor' if kind == 'magic_armor_guard' else kind
@@ -413,6 +430,19 @@ class World:
                 self._remove_echo()
                 self.notify('분신의 재현이 끝났습니다.')
 
+        self._update_reveal()
+        self._update_switches()
+        if self.player.base < -PIT_DEPTH:
+            self.invulnerable = 0
+            self.hurt(self.health, '구덩이에 떨어졌습니다!')
+            return
+        if self.recording is not None and self.recording.preview.base < -PIT_DEPTH:
+            self.cancel_recording()
+            self.notify('분신이 구덩이에 떨어졌습니다.')
+        if self.echo is not None and self.echo.actor.base < -PIT_DEPTH:
+            self._remove_echo()
+            self.notify('분신이 구덩이에 떨어졌습니다.')
+
         self._update_sync()
         self._update_bridge()
         if self.result != 'playing':
@@ -449,6 +479,28 @@ class World:
         entries = [stair.x for stair in self.stage.stairs + self.stage.elevators if stair.lower == floor - 1]
         self.player.x = entries[0] if entries else boss.actor.x - 400
         self.player.floor = floor
+
+    def warp_to_floor(self, floor: int) -> bool:
+        """본체를 같은 스테이지의 floor층 입구로 옮긴다. - 키용.
+        그 층으로 올라오는 승강기·사다리 자리에 내려 구덩이나 독 위에 떨어지지 않게 한다. 1층은 시작 위치."""
+        if not 0 <= floor < self.stage.floors or self.result != 'playing':
+            return False
+        if self.recording is not None:
+            self.notify('분신 녹화 중에는 층을 옮길 수 없습니다.')
+            return False
+        entries = [stair.x for stair in self.stage.elevators + self.stage.stairs if stair.lower == floor - 1]
+        if entries:
+            x = entries[0]
+        elif self.stage.start.floor == floor:
+            x = self.stage.start.x
+        else:
+            x = next((stair.x for stair in self.stage.elevators + self.stage.stairs if stair.lower == floor),
+                     self.stage.start.x)
+        self.player = Actor(x, floor, self.player.facing)
+        self.lift_riding = False
+        self._update_doors(0)
+        self.notify(f'{floor + 1}층으로 이동했습니다.')
+        return True
 
     def hazard_lit(self, hazard: Point) -> bool:
         """분신의 빛이 함정을 비추는가. 같은 층에서는 곁을, 바로 위층에서는 발밑 아래층을 비춘다."""
@@ -505,6 +557,9 @@ class World:
         for gate, state in zip(self.stage.gates, self.doors):
             if gate.door.floor == floor and not state.open:
                 yield gate.door.x
+        for switch, on in zip(self.stage.switches, self.switched):
+            if not on and switch.door.floor == floor:
+                yield switch.door.x
 
     def _spider_surfaces(self, floor):
         # 충돌 가능한 문과 벽만 사용한다. 경비 몬스터와 배경 무늬는 제외한다.
@@ -567,7 +622,11 @@ class World:
     def _swing(self, actor: Actor, motion: Motion):
         """거미줄 그네 한 스텝. 매달린 동안은 진자, 놓은 뒤에는 포물선으로 움직인다."""
         actor.web_time += STEP
-        if not actor.web_flying and motion.jump:
+        if not actor.web_flying and motion.release:
+            # D: 날아가지 않고 그 자리에서 줄을 놓고 떨어진다.
+            actor.web_flying = True
+            actor.web_vx = actor.web_vy = 0.0
+        elif not actor.web_flying and motion.jump:
             # 놓는 순간의 진자 속도 그대로 날아간다.
             actor.web_flying = True
             actor.web_vx = actor.web_speed * actor.web_length * cos(actor.web_angle)
@@ -618,6 +677,8 @@ class World:
         start = actor.x
         target = min(RIGHT, max(LEFT, start + amount))
         margin = GATE_HALF_WIDTH + ACTOR_RADIUS
+        # 문·벽(높이 약 120)보다 높은 공중 턱이나 그네 위에서는 그 위를 지나간다.
+        over = over or actor.jump_height >= SPIDER_OVER_HEIGHT
         for wall in () if over else self._barriers(actor.floor):
             if ignore_barrier is not None and abs(wall - ignore_barrier) < 0.01:
                 continue
@@ -639,7 +700,97 @@ class World:
         actor.moving = distance > 0.001
         actor.walk_distance += distance
 
+    def platform_visible(self, index: int) -> bool:
+        return not self.stage.platforms[index].hidden or index in self.revealed
+
+    def _over_pit(self, floor: int, x: float) -> bool:
+        return any(pit_floor == floor and left < x < right for pit_floor, left, right in self.stage.pits)
+
+    def _ground_heights(self, actor: Actor):
+        """actor가 지금 x에서 설 수 있는 높이들. 구덩이 밖 바닥(0)과 보이는 발판."""
+        if not self._over_pit(actor.floor, actor.x):
+            yield 0.0
+        for index, platform in enumerate(self.stage.platforms):
+            if (platform.floor == actor.floor and platform.left <= actor.x <= platform.right
+                    and self.platform_visible(index)):
+                yield float(platform.height)
+
+    def _settle(self, actor: Actor, before: float):
+        """발판 착지와 낙하. 점프가 내려오다 발판 높이를 지나면 그 위에 선다."""
+        if (not self.stage.pits and not self.stage.platforms) or actor.elevator_target is not None \
+                or actor.web_time > 0 or actor.door_climb_time > 0:
+            return
+        if actor.jump_time > 0:
+            now = actor.jump_height
+            landing = [height for height in self._ground_heights(actor) if now <= height <= before]
+            if now < before and landing:
+                actor.base, actor.jump_time, actor.beast_super_jump = max(landing), 0.0, False
+            return
+        if actor.fall_speed == 0 and actor.base in self._ground_heights(actor):
+            return
+        actor.fall_speed += FALL_GRAVITY * STEP
+        below = actor.base - actor.fall_speed * STEP
+        landing = [height for height in self._ground_heights(actor) if below <= height <= actor.base]
+        if landing:
+            actor.base, actor.fall_speed = max(landing), 0.0
+        else:
+            actor.base = below
+
+    def _watchers(self):
+        if self.recording is not None and self.recording.monster_kind == 'watcher':
+            yield self.recording.preview
+        if self.echo is not None and self.echo.monster_kind == 'watcher':
+            yield self.echo.actor
+
+    def _update_reveal(self):
+        """외눈 유령 분신이 있는 동안 레이더 안의 발판이 드러나고, 분신이 사라지면
+        stage.reveal_seconds(1스테이지 10초) 뒤 다시 숨는다. 레이더 원이 렌즈에 닿으면 그 층 발판이 모두 드러난다."""
+        if not self.stage.platforms:
+            return
+        watchers = list(self._watchers())
+        if watchers:
+            self.reveal_time = self.stage.reveal_seconds
+        elif self.reveal_time > 0:
+            self.reveal_time = max(0.0, self.reveal_time - STEP)
+            if self.reveal_time == 0 and self.revealed:
+                self.revealed.clear()
+                self.lens_lit = False
+                self.notify('발판이 다시 사라졌습니다!')
+        lens = self.stage.lens
+        for actor in watchers:
+            if not actor.radar or actor.elevator_target is not None:
+                continue
+            eye = actor.jump_height + RADAR_EYE
+            lit = (lens is not None and lens.floor == actor.floor
+                   and hypot(lens.x - actor.x, lens.height - eye) <= RADAR_RANGE)
+            if lit and not self.lens_lit:
+                self.lens_lit = True
+                self.notify('렌즈가 빛을 퍼뜨려 숨은 발판이 모두 드러났습니다!')
+            for index, platform in enumerate(self.stage.platforms):
+                x = min(max(actor.x, platform.left), platform.right)
+                if platform.floor == actor.floor and (
+                        lit or hypot(x - actor.x, platform.height - eye) <= RADAR_RANGE):
+                    self.revealed.add(index)
+
+    def _update_switches(self):
+        """분신(녹화 중인 분신 포함)이 공중 턱의 스위치에 올라서면 그 문이 열린 채로 고정된다."""
+        for index, switch in enumerate(self.stage.switches):
+            if self.switched[index]:
+                continue
+            for actor in self.echo_actors():
+                if (actor.floor == switch.floor and actor.elevator_target is None and actor.jump_time == 0
+                        and actor.fall_speed == 0 and abs(actor.base - switch.height) < 1
+                        and abs(actor.x - switch.x) <= PLATE_RANGE):
+                    self.switched[index] = True
+                    self.notify('스위치가 눌렸습니다! 잠긴 문이 열렸습니다.')
+                    break
+
     def _move(self, actor: Actor, motion: Motion, monster_kind=None):
+        before = actor.jump_height
+        self._move_body(actor, motion, monster_kind)
+        self._settle(actor, before)
+
+    def _move_body(self, actor: Actor, motion: Motion, monster_kind=None):
         if monster_kind == 'crawler' and actor.door_climb_time > 0:
             progress = min(1.0, actor.door_climb_time / SPIDER_DOOR_CLIMB_DURATION)
             across = max(0.0, min(1.0, (progress - 0.35) / 0.30))
@@ -741,6 +892,8 @@ class World:
                 actor.elevator_time = 0.0
                 actor.moving = False
                 return
+        if monster_kind == 'watcher' and motion.web:
+            actor.radar = not actor.radar
         if monster_kind == 'beast':
             if motion.jump and actor.jump_time == 0 and not motion.stairs:
                 actor.beast_charge_active = True
@@ -772,7 +925,8 @@ class World:
             # 땅에 있을 때의 사다리와 승강기는 기존 방식으로 처리한다.
         if motion.horizontal:
             actor.facing = motion.horizontal
-        if motion.jump and actor.jump_time == 0 and not motion.stairs and monster_kind != 'beast':
+        if (motion.jump and actor.jump_time == 0 and actor.fall_speed == 0
+                and not motion.stairs and monster_kind != 'beast'):
             actor.jump_duration = JUMP_DURATION
             actor.jump_peak = JUMP_HEIGHT
             actor.jump_time = STEP
@@ -781,7 +935,7 @@ class World:
             if actor.jump_time >= actor.jump_duration:
                 actor.jump_time = 0.0
         self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
-        if motion.stairs and actor.jump_time == 0:
+        if motion.stairs and actor.jump_time == 0 and actor.base == 0 and actor.fall_speed == 0:
             lower = actor.floor if motion.stairs > 0 else actor.floor - 1
             for elevator in self.stage.elevators:
                 if elevator.lower == lower and abs(elevator.x - actor.x) <= STAIR_RANGE:
@@ -943,6 +1097,8 @@ class World:
             return False
         if first.floor != second.floor or abs(first.x - second.x) > distance:
             return False
+        if abs(first.jump_height - second.jump_height) > 60:   # 다른 단의 발판이나 높이 뜬 상대
+            return False
         left, right = sorted((first.x, second.x))
         return not any(left < wall < right for wall in self._barriers(first.floor))
 
@@ -994,6 +1150,9 @@ class World:
         enemy.flash = max(0, enemy.flash - STEP)
         enemy.recovery = max(0, enemy.recovery - STEP)
         left, right = enemy.spawn.patrol
+        if enemy.spawn.kind == 'tier_ghost':
+            self._update_ghost(enemy, kind)
+            return
 
         def within_chase_area(target):
             return left - ENEMY_CHASE_MARGIN <= target.x <= right + ENEMY_CHASE_MARGIN
@@ -1069,13 +1228,34 @@ class World:
         if abs(actor.x - destination) < 1 or not actor.moving:
             enemy.patrol_direction *= -1
 
-    def _walk_enemy(self, actor: Actor, destination: float, speed: float):
+    def _update_ghost(self, enemy: Enemy, kind):
+        """층 유령은 표적을 쫓지 않고 자기 높이에서 좌우로 떠다니며, 같은 높이에서 닿으면 피해를 준다."""
+        actor = enemy.actor
+        left, right = enemy.spawn.patrol
+        destination = left if enemy.patrol_direction < 0 else right
+        # 위 단일수록 빠르다: 1단 60 → 4단 96
+        self._walk_enemy(actor, destination, kind.speed * (1 + actor.base / 180), floating=True)
+        if abs(actor.x - destination) < 1 or not actor.moving:
+            enemy.patrol_direction *= -1
+        for target in (self.player, *self.echo_actors()):
+            if (target.floor == actor.floor and target.elevator_target is None
+                    and abs(target.x - actor.x) <= kind.attack_range
+                    and abs(target.jump_height - actor.base) < 30):
+                if target is self.player:
+                    self.hurt(self.enemy_damage(enemy), '유령에게 닿았습니다!')
+                else:
+                    self.hurt_echo(target, self.enemy_damage(enemy))
+
+    def _walk_enemy(self, actor: Actor, destination: float, speed: float, floating=False):
         if self.stage.guard and any(enemy.actor is actor and enemy.spawn.point == self.stage.guard for enemy in self.enemies):
             return
         direction = approach_direction(actor.x, destination)
         if direction:
             actor.facing = direction
+            start = actor.x
             self._move_x(actor, direction * min(abs(destination - actor.x), speed * STEP))
+            if not floating and self._over_pit(actor.floor, actor.x):
+                actor.x, actor.moving = start, False   # 땅을 걷는 적은 구덩이 앞에서 멈춘다
 
     def hurt(self, amount: int, message: str) -> bool:
         """본체가 피해를 한 번 입는다. 무적 시간 중이면 False."""

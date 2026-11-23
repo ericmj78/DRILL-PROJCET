@@ -158,7 +158,7 @@ class SpiderEchoTests(unittest.TestCase):
     def test_pumping_swings_further_than_hanging(self):
         distances = {}
         for name, push in (('hang', 0), ('pump', 'pump')):
-            w = World(1)
+            w = World(2)   # 벽이 있는 간수 구역
             w.enemies.clear()
             spider = Actor(1300, 0)
             w._move(spider, Motion(web=True), 'crawler')
@@ -195,7 +195,7 @@ class SpiderEchoTests(unittest.TestCase):
 
     @patch('world.SPIDER_AIM_REACH', 480)
     def test_reeling_in_lifts_the_spider_over_a_wall(self):
-        w = World(1)
+        w = World(2)   # 벽이 있는 간수 구역
         w.enemies.clear()
         wall = w.stage.walls[0]
         spider = Actor(wall.x - 60, wall.floor)
@@ -265,7 +265,7 @@ class SpiderEchoTests(unittest.TestCase):
                 self.assertFalse(w.doors[0].pressed)
 
     def test_climbs_actual_wall_obstacle(self):
-        w = World(1)
+        w = World(2)   # 벽이 있는 간수 구역
         wall = w.stage.walls[0]
         spider = Actor(wall.x - GATE_HALF_WIDTH - ACTOR_RADIUS, wall.floor)
         w._move(spider, Motion(stairs=1), 'crawler')
@@ -282,6 +282,26 @@ class SpiderEchoTests(unittest.TestCase):
         self.land(w, spider)
         self.assertLess(spider.x, w.stage.gates[0].door.x)
         self.assertEqual(spider.web_time, 0)
+
+    def test_d_releases_the_web_in_place_and_replays(self):
+        w = self.world
+        beam = w.stage.web_beams[0]
+        w.player.x = beam.left + 40
+        w.start_recording('crawler')
+        w.step(Motion(stairs=1, web_aiming=True))
+        w.step(Motion(web=True))
+        for _ in range(30):         # 앞뒤로 흔든 뒤
+            w.step(Motion(horizontal=1))
+        spider = w.recording.preview
+        self.assertGreater(spider.web_time, 0)
+        released_at = spider.x
+        w.step(Motion(release=True))   # D: 그 자리에서 놓는다
+        self.assertTrue(spider.web_flying)
+        for _ in range(90):
+            w.step(Motion())
+        self.assertEqual(spider.web_time, 0)          # 바닥에 내려섰다
+        self.assertAlmostEqual(spider.x, released_at, delta=1)   # 날아가지 않았다
+        self.assertIn(Motion(release=True), w.recording.inputs)  # 녹화에도 남는다
 
     def test_web_cannot_be_used_by_normal_echo(self):
         actor = Actor(100, 0)
