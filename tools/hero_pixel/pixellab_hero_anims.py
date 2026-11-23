@@ -116,9 +116,9 @@ def drop_head_sparkles(frame):
     return drop_specks(out)
 
 
-def animate(base, name, n, action):
+def animate(base, name, n, action, seed=None):
     body = {"first_frame": b64(base), "action": action, "frame_count": n, "no_background": True,
-            "seed": SEED.get(name, 0)}
+            "seed": SEED.get(name, 0) if seed is None else seed}
     if name == "jump":  # 착지 후 기본 자세로 돌아오게 고정 (없으면 마지막 프레임이 뭉개짐)
         body["last_frame"] = b64(base)
     job = call("POST", "/animate-with-text-v3", body)

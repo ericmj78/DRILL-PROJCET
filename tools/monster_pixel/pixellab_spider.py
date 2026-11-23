@@ -18,15 +18,16 @@ from make_monsters import echo  # noqa: E402
 OUT = HERE.parents[1] / 'assets' / '몬스터_도트' / 'pixellab'
 W, H = 160, 112            # 한 칸. 물기 때 앞(왼쪽)으로 뻗고 몸을 드니 왼쪽·위를 넉넉히
 FEET, LEFT = 106, 40       # 기본 자세의 발밑 줄, 몸 왼쪽 끝
-ROWS = (                   # 줄 순서는 monster_sprite.py와 같다: 걷기, 공격, 대기
-    ('walk', 8, 'spider crawling forward to the left, eight legs stepping in alternating tetrapod gait, body level, side view'),
-    ('attack', 8, 'spider bite attack: rear back raising the front legs and opening the fangs, then lunge forward to the left and bite down hard with the fangs, then pull back, side view'),
-    ('idle', 4, 'spider idle, body gently bobbing up and down, legs twitching slightly, fangs moving, side view'),
+ROWS = (                   # 줄 순서는 monster_sprite.py와 같다: 걷기, 공격, 대기 / (이름, 칸 수, 시드, 동작)
+    ('walk', 8, 0, 'spider crawling forward to the left, eight legs stepping in alternating tetrapod gait, body level, side view'),
+    # 'fangs'를 강조하면 송곳니·다리가 거대해진다. 시드 5·15·25·41·42·44는 다리가 자라거나 몸이 돌아갔다.
+    ('attack', 8, 43, 'spider lunge bite: the spider crouches low, then its whole body darts forward to the left close to the ground and it bites with the small fangs under its eyes, the fangs open and snap shut at the front of the head, then it scuttles back to its starting pose. legs keep the same size and shape, nothing grows. side view'),
+    ('idle', 4, 0, 'spider idle, body gently bobbing up and down, legs twitching slightly, fangs moving, side view'),
 )
 
 
 def make_base(src_path):
-    """일러스트 → 128칸 도트(원본 반영 300) → 회색 배경 제거 → 24색."""
+    """일러스트 → 128칸 도트(원본 반영 300) → 회색 배경 제거."""
     src = Image.open(src_path).convert('RGBA')
     solid = src.getchannel('A').point(lambda v: 255 if v > 128 else 0)   # 원본의 옅은 얼룩은 버린다
     box = solid.getbbox()
@@ -58,10 +59,7 @@ def make_base(src_path):
         for x in range(128):
             if (x, y) in seen or near(px[x, y], 4):
                 px[x, y] = (0, 0, 0, 0)
-    alpha = img.getchannel('A')
-    img = img.convert('RGB').quantize(24, method=Image.Quantize.MEDIANCUT).convert('RGBA')
-    img.putalpha(alpha)
-    img = img.crop(img.getbbox())
+    img = img.crop(img.getbbox())   # 색 수를 줄이지 않는다: 줄이면 6픽셀짜리 주황 눈이 사라진다
     base = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     base.paste(img, (LEFT, FEET - img.height))
     return base
@@ -76,11 +74,11 @@ if __name__ == '__main__':
     base = Image.open(base_path).convert('RGBA')
     palette = sorted({c[:3] for c in base.get_flattened_data() if c[3]})
     sheet = Image.new('RGBA', (W * 8, H * len(ROWS)), (0, 0, 0, 0))
-    for row, (name, count, action) in enumerate(ROWS):
-        frames = animate(base, name, count, action)
+    for row, (name, count, seed, action) in enumerate(ROWS):
+        frames = animate(base, name, count, action, seed)
         frames = frames[1:] if name == 'attack' else frames[:count]   # 공격은 기본 자세 칸을 빼고 바로 준비부터
         for column, frame in enumerate(frames[:count]):
-            sheet.paste(drop_specks(to_palette(frame, palette), keep=8), (column * W, row * H))
+            sheet.paste(drop_specks(to_palette(frame, palette), keep=30), (column * W, row * H))
         print(name, len(frames))
     sheet.save(OUT / 'spider.png')
     echo(sheet).save(OUT / 'spider_echo.png')
