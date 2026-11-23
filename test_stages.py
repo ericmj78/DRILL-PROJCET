@@ -7,8 +7,8 @@ SOLUTIONS는 막혔을 때 읽는 공략집이기도 하다.
 import sys
 
 import boss_skills
-from stages import BOSS_KINDS, SKY_STEP, STAGES, STEP
-from world import Actor, Echo, Motion, World
+from stages import BOSS_KINDS, LEFT, MOVE_SPEED, RIGHT, SKY_STEP, STAGES, STEP
+from world import JUMP_DURATION, SKY_PIN, Actor, Echo, Motion, World
 
 
 class Bot:
@@ -374,42 +374,65 @@ def stage_3(b):
 
 @solution(4)
 def stage_4(b):
-    # 하늘 섬 7개를 한 단(38)씩 지그재그 계단으로 쌓는다. 1번 왼쪽 벽 5단(섬 4개), 2번 왼쪽 벽 맨 위
-    # 9단(1번 턱 위로 섬 3개), 3번 오른쪽 벽 8단(섬 7개). 섬이 모자라 왼쪽 계단을 통째로 오른쪽으로 옮긴다.
-    def left(k):                                   # 왼쪽 계단 k단의 x (5단은 1번 턱, 9단은 2번 턱)
-        return 235 if k % 2 and k not in (5, 9) else 115
+    # 하늘 섬 21개가 1~21단에 하나씩 좌우로 떠다닌다. 바로 윗단 섬이 점프 거리 안에 오면 뛰어 갈아타며
+    # 1번(왼쪽 10단)·2번(왼쪽 22단)·3번(오른쪽 16단) 턱에 오른다. 서 있는 섬이 실어 나르니 기다리면 온다.
+    half = b.w.stage.sky.width / 2
+    reach = MOVE_SPEED * JUMP_DURATION * 0.7
 
-    def right(k):                                  # 오른쪽 계단 k단의 x (8단은 3번 턱)
-        return 2130 if k == 8 else 2005 if k % 2 else 2125
+    def footing():
+        """지금 선 자리(바닥·섬·턱)에서 걸어도 안 떨어지는 x 범위."""
+        me = b.me
+        if me.base == 0:
+            return LEFT + 10, RIGHT - 10
+        for x, height in b.w.sky_blocks:
+            if height == me.base and abs(me.x - x) <= half:
+                return x - half + 8, x + half - 8
+        for p in b.w.stage.platforms:
+            if p.height == me.base and p.left <= me.x <= p.right:
+                return p.left + 8, p.right - 8
+        return me.x, me.x
 
-    def build(index, column, k):
-        """착지한 뒤 C → 마법책 분신으로 index번 섬을 column 계단 k단에 놓는다.
-        높은 단은 분신이 섬을 쥔 채 이미 쌓은 계단을 k-8단까지 올라가 염력이 닿게 한다."""
-        b.until(lambda w: w.player.base == 0 and w.player.fall_speed == 0)
-        b.w.start_recording('magic_book')
-        assert b.w.recording, f'녹화를 시작하지 못했습니다 {b}'
-        b.carry(index, column(k), SKY_STEP * k, climb=tuple(column(j) for j in range(1, k - 7)))
-        b.rec()
+    def jump_to(target):
+        """보통 점프로 뛰어 움직이는 target()을 따라가며 착지한다."""
+        b.tick(1 if target() > b.me.x else -1, jump=True)
+        while (b.me.jump_time > 0 or b.me.fall_speed) and b.w.result == 'playing':
+            gap = target() - b.me.x
+            b.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
+
+    def climb(ledge, ledge_x):
+        """ledge단 턱(ledge_x)까지 한 단씩 섬을 갈아탄다. 떨어지면 바닥부터 다시."""
+        for _ in range(round(600 / STEP)):
+            k = round(b.me.base / SKY_STEP)
+            if k == ledge:
+                return
+            target = (lambda: ledge_x) if k == ledge - 1 else (lambda i=k: b.w.sky_blocks[i][0])  # i번 섬은 i+1단
+            if abs(target() - b.me.x) <= reach:
+                jump_to(target)
+                continue
+            left, right = footing()                # 윗단 섬 쪽 끝으로 가서 기다린다
+            gap = min(max(target(), left), right) - b.me.x
+            b.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
+        raise AssertionError(f'{ledge}단 턱에 오르지 못했습니다 {b}')
+
+    def descend(direction):
+        """턱이나 섬 끝으로 걸어 나가 바닥까지 내려온다 (떨어지다 섬에 앉으면 그 섬에서도 걸어 나간다)."""
+        for _ in range(round(20 / STEP)):
+            if b.me.base == 0 and not b.me.fall_speed:
+                return
+            b.tick(direction)
+        raise AssertionError(f'바닥으로 내려오지 못했습니다 {b}')
 
     b.kill('magic_book')
     b.kill('potion_slime')
     b.kill('magic_armor')
-    b.go(600)
-    for index, k in enumerate((1, 2, 3, 4, 6, 7, 8)):
-        build(index, left, k)                      # 왼쪽부터 섬 0~6번
-    b.go(345)
-    for k in range(1, 6):
-        b.hop(left(k))
+    climb(10, 115)
     assert b.w.sky_progress == 1, f'1번 스위치가 켜지지 않았습니다 {b}'
-    for k in range(6, 10):
-        b.hop(left(k))
+    climb(22, 115)
     assert b.w.sky_progress == 2, f'2번 스위치가 켜지지 않았습니다 {b}'
-    b.go(1895)                                     # 섬을 타고 내려온다
-    for index, k in enumerate(range(1, 8)):
-        build(index, right, k)                     # 왼쪽 계단의 섬을 모두 오른쪽 벽으로
-    for k in range(1, 9):
-        b.hop(right(k))
+    descend(1)
+    climb(16, 2125)
     assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
+    descend(-1)
     b.go(1240)
 
 
@@ -678,6 +701,8 @@ def check_puzzles():
     w = World(3)
     sky = w.stage.sky
     w.enemies = []
+    for block in w.sky_blocks:     # 떠다니는 섬은 가운데로 치워 둔다 (몇 초 안에는 벽까지 못 온다)
+        block[0] = 1120
     for start, hops in ((300, (230, 130)), (1900, (2010, 2110))):
         w.player.x, w.player.base = start, 0
         for x in hops:
@@ -694,7 +719,27 @@ def check_puzzles():
     w.player.x = 100
     w.start_recording('magic_book')
     assert not w.sky_grab(*sky.blocks[3]), '멀리 있는 하늘 땅을 잡았습니다'
+    # 섬은 떠다니고, 위에 선 본체를 실어 나른다. 분신이 잡아 놓은 섬은 SKY_PIN초 멈췄다가 다시 떠다닌다.
+    w.sky_blocks[0] = [100, SKY_STEP]
+    assert w.sky_grab(100, SKY_STEP), '가까운 하늘 땅을 잡지 못했습니다'
+    w.sky_drag(160, SKY_STEP)
+    w.sky_release()
+    for _ in range(round((SKY_PIN - 0.2) / STEP)):
+        w.step(Motion())
+    assert w.sky_blocks[0] == [160, SKY_STEP], ('놓은 섬이 멈춰 있지 않았습니다', w.sky_blocks[0])
     w.cancel_recording()
+    w.player.x, w.player.base = 160, SKY_STEP
+    for _ in range(round(1 / STEP)):
+        w.step(Motion())
+    assert w.sky_blocks[0][0] != 160, '멈춘 섬이 다시 떠다니지 않았습니다'
+    assert w.player.base == SKY_STEP and abs(w.player.x - w.sky_blocks[0][0]) < 1, ('섬이 본체를 실어 나르지 않았습니다', w.player)
+    # 섬 위에 선 채로도 분신을 녹화하고, 재현 분신도 그 높이에서 출발한다.
+    w.start_recording('magic_book')
+    assert w.recording and w.recording.preview.base == SKY_STEP, '섬 위에서 분신 녹화가 시작되지 않았습니다'
+    w.step(Motion())
+    w.toggle_recording()
+    assert w.echo and w.echo.actor.base == SKY_STEP, ('재현 분신이 섬 높이에서 출발하지 않았습니다', w.echo)
+    w.echo = None
     # 순서가 틀리면 스위치와 옮긴 땅이 모두 처음으로 돌아간다.
     w.sky_progress, w.sky_blocks[0] = 1, [300, 40]
     w.player.x, w.player.base = sky.switches[2][0], sky.switches[2][1]

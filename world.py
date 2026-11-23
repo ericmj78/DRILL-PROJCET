@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, replace
 from math import asin, atan2, cos, hypot, pi, sin
+import random
 
 import boss_skills
 from stages import HAZARD_RATIO, LEVEL_UP_XP, attack_power, max_health
@@ -14,10 +15,14 @@ from stages import (
 )
 
 JUMP_DURATION = 0.64
-JUMP_HEIGHT = 42
+JUMP_HEIGHT = 48  # 49를 넘으면 슈퍼 점프(100)가 보통 점프의 두 배가 안 된다
 BEAST_JUMP_DURATION = 1.0
 BEAST_JUMP_HEIGHT = 100
 BEAST_CHARGE_SECONDS = 1.0
+# 하늘 섬: 좌우로 아무 곳이나 정해 떠다니고, 마법책 분신이 놓은 섬은 SKY_PIN초 멈췄다가 다시 떠다닌다.
+SKY_SPEED = (60.0, 110.0)  # px/s
+SKY_WALL_BIAS = 300        # 목표를 맵 밖까지 뽑고 벽에서 자른다: 벽 턱 옆에 섬이 더 자주 머문다
+SKY_PIN = 15.0
 ELEVATOR_DURATION = 0.8
 ENEMY_CHASE_MARGIN = 400
 ECHO_DAMAGE_RATIO = 0.30
@@ -38,7 +43,7 @@ SPIDER_MAX_ANGLE = 1.35    # 줄이 수직에서 벌어질 수 있는 최대 각
 SPIDER_OVER_HEIGHT = 125   # 이 높이 이상이면 문과 벽 위로 넘어간다
 SPIDER_DOOR_CLIMB_DURATION = 1.2
 SPIDER_DOOR_CLIMB_HEIGHT = 145
-FALL_GRAVITY = 820         # 보통 점프(높이 42, 0.64초)와 같은 중력
+FALL_GRAVITY = 820         # 예전 보통 점프(높이 42, 0.64초)에 맞춘 낙하 중력
 PIT_DEPTH = 90             # 구덩이로 이만큼 떨어지면 죽는다
 RADAR_RANGE = 220          # 외눈 유령 분신의 눈에서 발판이 드러나는 거리
 RADAR_EYE = 55             # 발밑에서 눈까지의 높이
@@ -123,6 +128,7 @@ class Recording:
     inputs: list[Motion] = field(default_factory=list)
     monster_kind: str | None = None
     clock: float = 0.0         # 녹화를 시작할 때의 움직이는 발판 시계
+    base: float = 0.0          # 녹화를 시작한 높이 (하늘 섬 위에서 시작하면 0보다 크다)
 
 
 @dataclass
@@ -194,6 +200,9 @@ class World:
         self.sky_on = None         # 본체가 지금 밟고 있는 하늘 스위치 (한 번 밟을 때 한 번만 판정)
         self.sky_hold = None       # 마법책 분신이 염력으로 잡은 땅 번호
         self.sky_target = (0.0, 0.0)
+        self.sky_rng = random.Random(index)   # 스테이지마다 같은 순서로 떠다니게 (테스트가 재현되도록)
+        self.sky_goal = [self._sky_goal() for _ in self.sky_blocks]   # 땅마다 [목표 x, 속도]
+        self.sky_pin = [0.0] * len(self.sky_blocks)                   # 놓인 뒤 멈춰 있을 남은 시간
         self.reveal_time = 0.0  # 외눈 유령 분신이 사라진 뒤 남은 공개 시간
         self.health = self.max_health
         self.damage_texts = []  # 맞은 자리에 뜨는 피해 숫자 [x, 층, 지난 시간, 글자, 본체가 맞았는가]
@@ -301,7 +310,8 @@ class World:
 
     def start_recording(self, monster_kind: str | None = None):
         self.echo_selecting = False
-        if self.player.base != 0 or self.player.fall_speed:
+        # 하늘 섬 스테이지는 섬 위에 선 채로도 녹화한다. 다른 스테이지는 발판 퍼즐이 풀리지 않게 바닥에서만.
+        if self.player.fall_speed or (self.player.base != 0 and not self.stage.sky):
             self.notify('바닥에 내려선 뒤 분신 녹화를 시작하세요.')
             return
         if self.recording is None:
@@ -310,8 +320,10 @@ class World:
             self._remove_echo()
             start = Point(self.player.x, self.player.floor)
             facing = self.player.facing
-            self.recording = Recording(start, facing, Actor.at(start, facing), monster_kind=monster_kind,
-                                       clock=clock)
+            preview = Actor.at(start, facing)
+            preview.base = self.player.base
+            self.recording = Recording(start, facing, preview, monster_kind=monster_kind,
+                                       clock=clock, base=self.player.base)
             self._update_doors(0)
             self.notify('마우스로 분신 둘레의 하늘 땅을 끌어 길을 만드세요.' if self._sky_book()
                         else '분신으로 이동하고 필요한 자리에서 기다리세요.')
@@ -360,8 +372,9 @@ class World:
             self.notify('분신이 재현할 녹화가 비어 있어요.')
             return
         self._remove_echo()
-        self.echo = Echo(Actor.at(record.start, record.facing), tuple(record.inputs),
-                         monster_kind=record.monster_kind, clock=record.clock)
+        actor = Actor.at(record.start, record.facing)
+        actor.base = record.base   # 섬이 떠나 버렸으면 그 자리에서 떨어진다
+        self.echo = Echo(actor, tuple(record.inputs), monster_kind=record.monster_kind, clock=record.clock)
         self._update_doors(0)
         self.notify('녹화 상한에 도달해 재현을 시작합니다.' if time_limit else '본체 조작 재개 · 분신이 재현합니다.')
 
@@ -877,16 +890,44 @@ class World:
             self.sky_blocks[self.sky_hold] = list(self._sky_clamp(book, x, height))
 
     def sky_release(self):
+        if self.sky_hold is not None:
+            self.sky_pin[self.sky_hold] = SKY_PIN
         self.sky_hold = None
+
+    def _sky_goal(self):
+        half = self.stage.sky.width / 2
+        x = self.sky_rng.uniform(LEFT + half - SKY_WALL_BIAS, RIGHT - half + SKY_WALL_BIAS)
+        return [min(max(x, LEFT + half), RIGHT - half), self.sky_rng.uniform(*SKY_SPEED)]
+
+    def _drift_sky(self):
+        """잡혀 있거나 멈춘 땅을 빼고 목표 x로 떠간다. 땅 위에 선 본체·분신도 함께 옮겨 간다."""
+        half = self.stage.sky.width / 2
+        riders = [self.player, self.recording.preview if self.recording else None, self.echo.actor if self.echo else None]
+        riders = [a for a in riders if a is not None and a.floor == 0 and a.jump_time == 0 and not a.fall_speed]
+        for index, block in enumerate(self.sky_blocks):
+            if index == self.sky_hold:
+                continue
+            if self.sky_pin[index] > 0:
+                self.sky_pin[index] -= STEP
+                continue
+            goal, speed = self.sky_goal[index]
+            dx = max(-speed * STEP, min(speed * STEP, goal - block[0]))
+            for actor in riders:
+                if actor.base == block[1] and abs(actor.x - block[0]) <= half:
+                    actor.x += dx
+            block[0] += dx
+            if block[0] == goal:
+                self.sky_goal[index] = self._sky_goal()
 
     def _update_sky(self):
         sky = self.stage.sky
         if not sky:
             return
         if self._sky_book() is None:
-            self.sky_hold = None
+            self.sky_release()
         elif self.sky_hold is not None:
             self.sky_drag(*self.sky_target)   # 분신이 걸어가면 잡은 땅도 끌려온다
+        self._drift_sky()
         player = self.player
         on = None
         if player.elevator_target is None and player.jump_time == 0 and player.fall_speed == 0:
@@ -902,6 +943,7 @@ class World:
                 self.sky_progress = 0
                 self.sky_blocks = [list(block) for block in sky.blocks]
                 self.sky_hold = None
+                self.sky_pin = [0.0] * len(self.sky_blocks)
                 self.notify('순서가 틀렸습니다! 스위치와 하늘 땅이 처음으로 돌아갑니다.')
         self.sky_on = on
 

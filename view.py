@@ -175,8 +175,13 @@ class View:
         self.wizard_art = load_asset('wizard_castle/castle-dark.png')
         self.sky_library_art = load_asset('층별맵/3스테이지_마법도서관_통합배경.png')
         sdl2.SDL_SetTextureScaleMode(self.sky_library_art.texture, sdl2.SDL_ScaleModeLinear)
+        # 하늘 섬 날갯짓 (PixelLab, tools/monster_pixel/pixellab_sky_island.py): 가로 8칸, 한 칸 176 × 80, 돌 윗면 35줄
+        self.sky_island_art = load_asset('PixelLab/스테이지/sky_island.png')
+        sdl2.SDL_SetTextureScaleMode(self.sky_island_art.texture, sdl2.SDL_ScaleModeNearest)
         self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
         self.late_three_floor_art = load_asset('map_sections/echo-knight-approach-three-floors-concept.png')
+        self.late_arcane_castle = load_asset('map_sections/late_arcane_castle.png')
+        self.late_arcane_arena = load_asset('map_sections/late_arcane_arena.png')
         self.echo_boss_arena = load_asset('map_sections/echo-knight-arena-concept.png')
         self.prison_boss_arena = load_asset('map_sections/stage-03-boss-arena.png')
         self.witch_boss_arena = load_asset('map_sections/stage-07-witch-boss-arena.png')
@@ -486,19 +491,19 @@ class View:
             bottom = self.floor_y[0] - (image.h - 690) * scale_y
             rows = ((455, 724), (228, 455), (0, 228))
             for floor, (top, lower) in enumerate(rows):
-                layer = self.floor_images[world.index][floor]
-                draw_region(layer, (0, 0, layer.w, layer.h), -self.camera_x,
+                layer = self.late_arcane_castle
+                draw_region(layer, (0, top, layer.w, lower - top), -self.camera_x,
                             bottom + (image.h - lower) * scale_y,
                             WIDTH * 2, (lower - top) * scale_y)
             if world.index == 6:
                 # The five-floor stage continues the same background above floor 3.
                 for floor, (top, lower) in enumerate(rows, start=3):
-                    layer = self.floor_images[world.index][floor]
-                    draw_region(layer, (0, 0, layer.w, layer.h), -self.camera_x,
+                    layer = self.late_arcane_castle
+                    draw_region(layer, (0, top, layer.w, lower - top), -self.camera_x,
                                 bottom + levels[3] + (image.h - lower) * scale_y,
                                 WIDTH * 2, (lower - top) * scale_y)
             elif world.index == 8:
-                arena = self.floor_arenas[world.index]
+                arena = self.late_arcane_arena
                 draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
                             self.floor_y[3] - 95, WIDTH * 2, 560)
         elif world.index in (2, 5):
@@ -662,20 +667,12 @@ class View:
         half = sky.width / 2
         for index, (bx, height) in enumerate(world.sky_blocks):
             x, y = bx - self.camera_x, floor_y + height
-            flap = sin(time * 7 + index * 1.7) * 9
-            for side in (-1, 1):
-                root = x + side * (half - 6)
-                tip = x + side * (half + 34)
-                self._polygon([(root, y - 6), (tip, y + 18 + flap), (root + side * 18, y - 14 + flap * 0.5)],
-                              [(250, 250, 255, 255), (214, 226, 246, 255), (232, 238, 252, 255)])
-            self._polygon([(x - half, y - 18), (x + half, y - 18), (x, y - 44)],
-                          [(92, 70, 56, 255), (92, 70, 56, 255), (58, 44, 38, 255)])
-            box(x - half, y - 18, x + half, y - 6, (124, 92, 66))
-            box(x - half, y - 6, x + half, y, (96, 178, 92))
+            frame = int(time * 9 + index * 3) % 8   # 섬마다 날갯짓 박자를 어긋나게
+            draw_region(self.sky_island_art, (frame * 176, 0, 176, 80), x - 88, y - 45, 176, 80)
             if index == world.sky_hold:
-                box(x - half - 3, y - 47, x + half + 3, y + 3, CYAN, filled=False)
+                box(x - half - 3, y - 33, x + half + 3, y + 3, CYAN, filled=False)
             elif book is not None and hypot(bx - book.x, height - book.jump_height - 30) <= sky.reach:
-                box(x - half - 2, y - 46, x + half + 2, y + 2, (214, 176, 255), filled=False)
+                box(x - half - 2, y - 32, x + half + 2, y + 2, (214, 176, 255), filled=False)
         for index, (sx, height) in enumerate(sky.switches):
             on = index < world.sky_progress
             x, y = sx - self.camera_x, floor_y + height
