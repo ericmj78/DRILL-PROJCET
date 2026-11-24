@@ -47,6 +47,21 @@ FALL_GRAVITY = 820         # 예전 보통 점프(높이 42, 0.64초)에 맞춘 
 PIT_DEPTH = 90             # 구덩이로 이만큼 떨어지면 죽는다
 RADAR_RANGE = 220          # 외눈 유령 분신의 눈에서 발판이 드러나는 거리
 RADAR_EYE = 55             # 발밑에서 눈까지의 높이
+# 물약 슬라임 분신: F를 누르고 있으면 힘이 모이고, 떼면 바라보는 쪽 위로 물약을 던진다.
+# 75°로 던져 가장 세게 던지면 높이 약 300, 거리 약 320까지 간다.
+POTION_ANGLE = 1.31
+POTION_SPEED = (300.0, 760.0)
+POTION_GRAVITY = 900
+POTION_CHARGE = 1.0        # 이만큼 모으면 가장 세게 던진다 (초)
+POTION_HAND = 40           # 발밑에서 손까지
+PORTAL_RANGE = 16          # 포털 가운데에서 이만큼 안에 서면 들어간다
+
+
+def potion_launch(actor) -> list:
+    """물약 슬라임 분신이 지금 던지면 날아갈 물약 [x, 층, 높이, vx, vh]. 화면의 예상 궤적도 쓴다."""
+    speed = POTION_SPEED[0] + (POTION_SPEED[1] - POTION_SPEED[0]) * min(1.0, actor.potion_charge / POTION_CHARGE)
+    return [actor.x, actor.floor, actor.jump_height + POTION_HAND,
+            actor.facing * speed * cos(POTION_ANGLE), speed * sin(POTION_ANGLE)]
 
 
 @dataclass
@@ -85,6 +100,7 @@ class Actor:
     base: float = 0.0             # 서 있는 발판의 높이. 구덩이로 떨어지면 음수가 된다.
     fall_speed: float = 0.0
     radar: bool = False           # 외눈 유령 분신의 레이더 (F)
+    potion_charge: float = 0.0    # 물약 슬라임 분신이 F로 모은 시간
 
     @property
     def elevator_offset(self):
@@ -201,9 +217,13 @@ class World:
         self.sky_hold = None       # 마법책 분신이 염력으로 잡은 땅 번호
         self.sky_target = (0.0, 0.0)
         self.sky_rng = random.Random(index)   # 스테이지마다 같은 순서로 떠다니게 (테스트가 재현되도록)
-        self.sky_goal = [self._sky_goal() for _ in self.sky_blocks]   # 땅마다 [목표 x, 속도]
+        self.sky_goal = [self._sky_goal(index) for index in range(len(self.sky_blocks))]   # 땅마다 [목표 x, 속도]
         self.sky_pin = [0.0] * len(self.sky_blocks)                   # 놓인 뒤 멈춰 있을 남은 시간
         self.reveal_time = 0.0  # 외눈 유령 분신이 사라진 뒤 남은 공개 시간
+        self.potions = []            # 날아가는 물약 [x, 층, 높이, vx, vh]
+        self.portals = [None, None]  # 파랑·주황 포털 (층, 땅 번호 또는 None, x, 높이). 땅 위면 x는 땅 가운데에서의 거리
+        self.portal_next = 0         # 다음 물약이 만들 포털 (번갈아 옮겨 간다)
+        self.portal_lock = True      # 포털에서 나온 뒤 한 번 비켜서야 다시 들어간다
         self.health = self.max_health
         self.damage_texts = []  # 맞은 자리에 뜨는 피해 숫자 [x, 층, 지난 시간, 글자, 본체가 맞았는가]
         self.weapon_index = weapon_index
@@ -326,6 +346,8 @@ class World:
                                        clock=clock, base=self.player.base)
             self._update_doors(0)
             self.notify('마우스로 분신 둘레의 하늘 땅을 끌어 길을 만드세요.' if self._sky_book()
+                        else 'F를 누르고 있다가 떼면 물약을 던집니다. 두 병이 포털 한 쌍이 됩니다.'
+                        if monster_kind == 'potion_slime'
                         else '분신으로 이동하고 필요한 자리에서 기다리세요.')
 
     @property
@@ -458,6 +480,8 @@ class World:
         self._update_reveal()
         self._update_switches()
         self._update_sky()
+        self._update_potions()
+        self._update_portals()
         if self.player.base < -PIT_DEPTH:
             self.invulnerable = 0
             self.hurt(self.health, '구덩이에 떨어졌습니다!')
@@ -499,8 +523,15 @@ class World:
                 # 벽 문은 높이 125 위로 넘을 수 있어 하늘 땅 계단으로 넘지 못하게 출구 자체를 잠근다.
                 if self.message_time <= 0:
                     self.notify('1→2→3 스위치를 순서대로 밟아야 출구가 열립니다.')
+            elif not self.portal_open:
+                pass   # 포탈 스위치를 누르기 전엔 출구 자리가 비어 있다
             else:
                 self.result = 'cleared'
+
+    @property
+    def portal_open(self) -> bool:
+        """문 없는 스위치(출구 포탈 스위치)가 모두 눌렸는가. 그런 스위치가 없으면 늘 열려 있다."""
+        return all(on for switch, on in zip(self.stage.switches, self.switched) if switch.door is None)
 
     def warp_to_boss(self):
         """본체를 보스가 있는 층의 입구(그 층으로 올라오는 사다리·승강기)로 옮긴다. B 키용."""
@@ -588,7 +619,7 @@ class World:
             if gate.door.floor == floor and not state.open:
                 yield gate.door.x
         for switch, on in zip(self.stage.switches, self.switched):
-            if not on and switch.door.floor == floor:
+            if not on and switch.door and switch.door.floor == floor:
                 yield switch.door.x
 
     def _spider_surfaces(self, floor):
@@ -837,16 +868,18 @@ class World:
                     self.revealed.add(index)
 
     def _update_switches(self):
-        """분신(녹화 중인 분신 포함)이 공중 턱의 스위치에 올라서면 그 문이 열린 채로 고정된다."""
+        """분신(녹화 중인 분신 포함)이나 본체가 공중 턱의 스위치에 올라서면 그 문이 열린 채로 고정된다.
+        본체는 포털로만 스위치 턱에 갈 수 있다 (점프로는 못 오른다)."""
         for index, switch in enumerate(self.stage.switches):
             if self.switched[index]:
                 continue
-            for actor in self.echo_actors():
+            for actor in (self.player, *self.echo_actors()):
                 if (actor.floor == switch.floor and actor.elevator_target is None and actor.jump_time == 0
                         and actor.fall_speed == 0 and abs(actor.base - switch.height) < 1
                         and abs(actor.x - switch.x) <= PLATE_RANGE):
                     self.switched[index] = True
-                    self.notify('스위치가 눌렸습니다! 잠긴 문이 열렸습니다.')
+                    self.notify('스위치가 눌렸습니다! ' + ('출구 포탈이 열렸습니다.' if switch.door is None
+                                                         else '잠긴 문이 열렸습니다.'))
                     break
 
     def _sky_book(self):
@@ -872,11 +905,14 @@ class World:
             return False
         sky = self.stage.sky
         center = (book.x, book.jump_height + 30)
-        near = [index for index, (bx, bh) in enumerate(self.sky_blocks)
-                if abs(x - bx) <= sky.width / 2 + 10 and abs(height - bh) <= 24
-                and hypot(bx - center[0], bh - center[1]) <= sky.reach]
+        hit = [index for index, (bx, bh) in enumerate(self.sky_blocks)
+               if abs(x - bx) <= sky.width / 2 + 10 and abs(height - bh) <= 24]
+        near = [index for index in hit if index not in sky.fixed
+                and hypot(self.sky_blocks[index][0] - center[0], self.sky_blocks[index][1] - center[1]) <= sky.reach]
         if not near:
-            if any(abs(x - bx) <= sky.width / 2 + 10 and abs(height - bh) <= 24 for bx, bh in self.sky_blocks):
+            if any(index in sky.fixed for index in hit):
+                self.notify('이 땅에는 염력이 통하지 않습니다.')
+            elif hit:
                 self.notify('염력이 닿지 않습니다. 분신을 땅 가까이 데려가세요.')
             return False
         self.sky_hold = min(near, key=lambda index: abs(x - self.sky_blocks[index][0]))
@@ -894,8 +930,11 @@ class World:
             self.sky_pin[self.sky_hold] = SKY_PIN
         self.sky_hold = None
 
-    def _sky_goal(self):
-        half = self.stage.sky.width / 2
+    def _sky_goal(self, index):
+        sky = self.stage.sky
+        if sky.lanes:
+            return [self.sky_rng.uniform(*sky.lanes[index]), self.sky_rng.uniform(*SKY_SPEED)]
+        half = sky.width / 2
         x = self.sky_rng.uniform(LEFT + half - SKY_WALL_BIAS, RIGHT - half + SKY_WALL_BIAS)
         return [min(max(x, LEFT + half), RIGHT - half), self.sky_rng.uniform(*SKY_SPEED)]
 
@@ -917,7 +956,7 @@ class World:
                     actor.x += dx
             block[0] += dx
             if block[0] == goal:
-                self.sky_goal[index] = self._sky_goal()
+                self.sky_goal[index] = self._sky_goal(index)
 
     def _update_sky(self):
         sky = self.stage.sky
@@ -946,6 +985,70 @@ class World:
                 self.sky_pin = [0.0] * len(self.sky_blocks)
                 self.notify('순서가 틀렸습니다! 스위치와 하늘 땅이 처음으로 돌아갑니다.')
         self.sky_on = on
+
+    def _potion_landing(self, floor: int, x: float, before: float, now: float):
+        """물약이 before에서 now 높이로 떨어지는 사이 닿는 가장 높은 면: (땅 번호 또는 None, x, 높이)."""
+        best = None if self._over_pit(floor, x) or not now <= 0 <= before else (None, x, 0.0)
+        for index, platform in enumerate(self.stage.platforms):
+            left, right = self.platform_span(index)
+            if (platform.floor == floor and self.platform_visible(index) and left <= x <= right
+                    and now <= platform.height <= before and (best is None or platform.height > best[2])):
+                best = (None, x, float(platform.height))
+        if self.sky_blocks and floor == 0:
+            for index, (bx, bh) in enumerate(self.sky_blocks):
+                if abs(x - bx) <= self.stage.sky.width / 2 and now <= bh <= before and (best is None or bh > best[2]):
+                    best = (index, x - bx, float(bh))
+        return best
+
+    def _update_potions(self):
+        """날아가는 물약. 바닥·발판·하늘 땅에 떨어지면 그 자리에 포털이 생기고,
+        결계·구덩이·맵 끝에서는 깨진다. 포털은 한 쌍이라 세 번째 병부터는 오래된 쪽이 옮겨 간다."""
+        flying = []
+        for x, floor, height, vx, vh in self.potions:
+            vh -= POTION_GRAVITY * STEP
+            nx, nh = x + vx * STEP, height + vh * STEP
+            # shortcut: 결계는 층을 따지지 않는다 (1층짜리 방에만 쓴다). 여러 층에 쓰면 층을 더한다.
+            if (not LEFT <= nx <= RIGHT or nh < -PIT_DEPTH
+                    or any(left <= nx <= right and bottom <= nh <= top
+                           for left, bottom, right, top in self.stage.seals)):
+                self.notify('물약이 깨졌습니다.')
+                continue
+            landing = self._potion_landing(floor, nx, height, nh) if vh < 0 else None
+            if landing is None:
+                flying.append([nx, floor, nh, vx, vh])
+                continue
+            self.portals[self.portal_next] = (floor, *landing)
+            self.portal_next = 1 - self.portal_next
+            self.portal_lock = True   # 발밑에 생긴 포털로 바로 빨려 들어가지 않게
+            self.notify('포털이 이어졌습니다!' if all(self.portals) else '포털 한쪽이 열렸습니다. 한 병 더 던지세요.')
+        self.potions = flying
+
+    def portal_point(self, index: int) -> tuple[int, float, float]:
+        """포털의 (층, x, 높이). 하늘 땅 위의 포털은 땅을 따라 움직인다."""
+        floor, block, x, height = self.portals[index]
+        if block is None:
+            return floor, x, height
+        bx, bh = self.sky_blocks[block]
+        return floor, bx + x, bh
+
+    def _update_portals(self):
+        """본체가 포털 위에 서면 다른 쪽 포털로 나온다."""
+        player = self.player
+        if not all(self.portals) or self.recording is not None or player.elevator_target is not None:
+            return
+        inside = None
+        for index in range(2):
+            floor, x, height = self.portal_point(index)
+            if player.floor == floor and abs(player.x - x) <= PORTAL_RANGE and abs(player.base - height) < 1:
+                inside = index
+        if inside is None:
+            self.portal_lock = False
+            return
+        if self.portal_lock or player.jump_time > 0 or player.fall_speed:
+            return
+        player.floor, player.x, player.base = self.portal_point(1 - inside)
+        self.portal_lock = True
+        self.notify('포털을 지나왔습니다.')
 
     def _move(self, actor: Actor, motion: Motion, monster_kind=None):
         self._ride(actor)
@@ -1057,6 +1160,14 @@ class World:
                 return
         if monster_kind == 'watcher' and motion.web:
             actor.radar = not actor.radar
+        if monster_kind == 'potion_slime':
+            if motion.web_aiming:
+                actor.potion_charge = min(POTION_CHARGE, actor.potion_charge + STEP)
+            elif actor.potion_charge > 0:
+                if self.recording is not None and actor is self.recording.preview:
+                    # 녹화하는 동안만 던진다. 재현 분신이 다시 던지면 만들어 둔 포털이 옮겨 가 버린다.
+                    self.potions.append(potion_launch(actor))
+                actor.potion_charge = 0.0
         if monster_kind == 'beast':
             if motion.jump and actor.jump_time == 0 and not motion.stairs:
                 actor.beast_charge_active = True

@@ -80,11 +80,12 @@ class Platform:
 
 @dataclass(frozen=True)
 class Switch:
-    """공중 턱 위의 스위치. 분신(녹화 중인 분신 포함)이 그 높이에 올라서면 door가 열린 채로 고정된다."""
+    """공중 턱 위의 스위치. 분신(녹화 중인 분신 포함)이 그 높이에 올라서면 door가 열린 채로 고정된다.
+    door가 없으면 출구 포탈을 여는 스위치다: 눌리기 전엔 출구가 없고, 눌리면 출구에 포탈이 생긴다."""
     floor: int
     x: int
     height: int
-    door: Point
+    door: Point | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,8 @@ class SkyPuzzle:
     switches: tuple[tuple[int, int], ...]
     width: int = 100
     reach: int = 340
+    lanes: tuple[tuple[int, int], ...] = ()   # 땅마다 떠다니는 x 범위 (왼쪽, 오른쪽). 비우면 맵 전체
+    fixed: tuple[int, ...] = ()               # 염력으로 잡을 수 없는 땅 번호
 
 
 SKY_STEP = 38   # 보통 점프(높이 48)로 오를 수 있는 한 단
@@ -201,7 +204,7 @@ ENEMY_KINDS = {
     'crawler': EnemyKind('monster_spider.png', 88, 185, 38, 10, 100, damage=7, xp=10),
     # 층 유령: 정해진 높이에서 좌우로 떠다니며 닿으면 최대 체력의 35% (세 번 닿으면 쓰러진다).
     'tier_ghost': EnemyKind('monster_03_watcher.png', 60, 0, 30, 8, 70, xp=6, damage_ratio=0.35),
-    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 260, damage=8, xp=80),
+    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 275, damage=8, xp=80),
     'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
     'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
     'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 32, 115, damage=11, xp=20),
@@ -210,7 +213,7 @@ ENEMY_KINDS = {
     'time_thief': EnemyKind('monster_concepts/time-thief.png', 65, 175, 42, 20, 108, damage=7, xp=16),
     'cursed_lantern': EnemyKind('monster_concepts/cursed-lantern.png', 70, 185, 42, 16, 112, damage=7, xp=14),
     'broken_jester': EnemyKind('monster_concepts/broken-jester.png', 75, 185, 40, 18, 104, damage=7, xp=15),
-    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 230, damage=11, xp=120),
+    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 268, damage=11, xp=120),
     'echo_knight': EnemyKind('monster_concepts/echo-knight-boss.png', 70, 260, 65, 180, 240, damage=12, xp=160),
 }
 
@@ -258,6 +261,8 @@ class Stage:
     switches: tuple[Switch, ...] = ()
     lens: Lens | None = None
     sky: SkyPuzzle | None = None
+    # 결계 (왼쪽, 아래 높이, 오른쪽, 위 높이). 물약 슬라임의 물약은 여기 닿으면 깨진다. 사람과 땅은 지나간다.
+    seals: tuple[tuple[int, int, int, int], ...] = ()
 
 
 STAGES = (
@@ -298,7 +303,7 @@ STAGES = (
     Stage(
         '02  뿔짐승의 도약',
         '뿔짐승을 처치해 분신을 얻으세요. 분신으로 Space를 1초 눌러 슈퍼 점프로 발판을 올라 스위치를 누르세요.',
-        2, Point(112, 0), Point(2140, 1),
+        2, Point(112, 0), Point(2100, 1),
         floor_height=800,
         # [1·2층 통합방] 바닥이 있다. 발판 사이 높이는 90이라 보통 점프(48)로는 못 오르고
         # 뿔짐승 분신의 슈퍼 점프(100)로만 오른다. 슈퍼 점프는 내려오며 발판 높이를 지날 때까지
@@ -307,7 +312,7 @@ STAGES = (
         # 오른쪽 위 턱의 스위치가 아래 잠긴 문을 연다.
         # [3·4층 통합방] 바닥이 뚫려 있다(떨어지면 죽는다). 발판은 숨어 있고, 외눈 유령 분신의
         # 레이더가 오른쪽 렌즈에 닿으면 모두 드러난다. 발판은 좌우로 움직여서 다음 발판이
-        # 다가오는 때를 보고 1초 먼저 모으기 시작해야 한다. 왼쪽 위 턱의 스위치가 출구 문을 연다.
+        # 다가오는 때를 보고 1초 먼저 모으기 시작해야 한다. 왼쪽 위 턱의 스위치가 출구 포탈을 연다.
         platforms=(
             Platform(0, 640, 680, 90, False), Platform(0, 790, 825, 180, False),
             Platform(0, 700, 735, 270, False), Platform(0, 555, 590, 360, False),
@@ -322,7 +327,7 @@ STAGES = (
             Platform(1, 200, 610, 630),
         ),
         pits=((1, 48, 1820),),
-        switches=(Switch(0, 1820, 630, Point(1790, 0)), Switch(1, 300, 630, Point(2060, 1))),
+        switches=(Switch(0, 1820, 630, Point(1790, 0)), Switch(1, 300, 630)),
         lens=Lens(1, 1990, 230),
         elevators=(Stair(1900, 0),),
         enemies=(EnemySpawn('beast', Point(520, 0), (420, 700)),),
@@ -375,7 +380,7 @@ STAGES = (
         echo_seconds=30,   # 땅을 반대쪽 벽까지 날라 디딤돌을 오르려면 시간이 더 든다
     ),
     Stage(
-        '05  아래층의 열쇠',
+        '06  아래층의 열쇠',
         'A 발판의 분신은 갑옷의 미끼도 됩니다. 문을 지나 갑옷이 격리실에 들어온 순간 E 레버를 당기세요.',
         4, Point(2065, 1), Point(104, 3),
         elevators=(Stair(180, 1), Stair(180, 2)),
@@ -391,7 +396,7 @@ STAGES = (
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
-        '06  대마녀의 다섯 층',
+        '07  대마녀의 다섯 층',
         '분신으로 균형 발판을 작동하고, 승강기를 타고 5층 대마녀에게 가세요.',
         5, Point(111, 0), Point(2100, 4),
         stairs=(Stair(145, 0),),
@@ -414,7 +419,7 @@ STAGES = (
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
-        '07  두 번째 잔향',
+        '08  두 번째 잔향',
         '분신은 B 발판을 밟은 뒤 아래층 동시 발판으로 가야 합니다. 두 발판을 함께 밟으면 문이 열립니다.',
         5, Point(120, 0), Point(2100, 4),
         stairs=(Stair(1300, 0), Stair(150, 1), Stair(1850, 2), Stair(150, 3)),
@@ -431,7 +436,7 @@ STAGES = (
         enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
-        '08  되돌아가는 발자국',
+        '09  되돌아가는 발자국',
         '3층의 함정은 분신 곁에서만 보입니다. 분신을 앞세워 뛰어넘고, 새 분신을 D 발판으로 돌려보내세요.',
         3, Point(112, 0), Point(2100, 2),
         stairs=(Stair(690, 0), Stair(950, 1)),
@@ -449,7 +454,7 @@ STAGES = (
         enemy_scale=LATE_STAGE_SCALE,
     ),
     Stage(
-        '09  마지막 잔향',
+        '10  마지막 잔향',
         '유인과 숨은 함정을 지나 승강기를 타고 마지막 보스를 처치하세요.',
         4, Point(100, 0), Point(2100, 3),
         elevators=(Stair(2000, 2),),
@@ -469,10 +474,38 @@ STAGES = (
         echo_seconds=MAX_RECORD_SECONDS,
         enemy_scale=LATE_STAGE_SCALE,
     ),
+    Stage(
+        '05  마녀의 실험 금고',
+        '물약 슬라임 분신은 F를 눌렀다 떼어 물약을 던집니다. 떨어진 자리에 포털이 생기고, 땅 위에 생긴 포털은 땅을 따라 움직입니다. '
+        '금고는 결계 때문에 물약이 못 들어가니, 포털이 붙은 땅을 마법책 분신의 염력으로 밀어 넣으세요.',
+        # [창살 방] 시작 쪽에서 물약 슬라임과 마법책을 처치해 분신을 얻는다. 창살 벽(640)은 본체가 못 넘고
+        # 물약은 넘는다: 슬라임 분신이 발밑과 창살 너머에 포털 한 쌍을 만든다.
+        # [독 수조] 820~1300은 바닥이 없다. 떠다니는 땅 A(염력이 안 통함)에 물약을 맞혀 포털을 붙이고
+        # 본체가 땅 A로 건너가 실려 간 뒤 건너편에 내린다. 물약은 최대 약 320px 날아가 건너편 바닥엔 못 닿는다.
+        # [봉인 금고] 금고(1780~2120, 바닥 높이 260)는 결계라 물약이 깨진다. 땅 B에 포털을 붙인 뒤
+        # 마법책 분신이 땅 B를 금고 안으로 끌어 놓으면(15초 멈춤) 본체가 포털로 들어가 스위치를 밟는다.
+        # 스위치를 밟으면 출구 포탈이 열린다.
+        1, Point(110, 0), Point(2155, 0),
+        floor_height=800,
+        walls=(Point(640, 0),),
+        pits=((0, 820, 1300),),
+        poison_zones=((0, 820, 1300),),
+        platforms=(Platform(0, 1780, 2120, 260, False),),
+        switches=(Switch(0, 2050, 260),),
+        seals=((1780, 250, 2120, 520),),
+        sky=SkyPuzzle(blocks=((1050, 160), (1560, 200)), switches=(),
+                      lanes=((950, 1240), (1450, 1700)), fixed=(0,)),
+        enemies=(
+            EnemySpawn('potion_slime', Point(300, 0), (240, 380)),
+            EnemySpawn('magic_book', Point(500, 0), (450, 570)),
+        ),
+        echo_seconds=20,
+    ),
 )
 
 # One visible stage may contain multiple connected map sections.
-STAGE_GROUPS = ((0,), (1, 2), (3,), (4, 5), (6,), (7, 8))
+# 마녀의 실험 금고(9)는 나중에 더해서 맨 뒤에 있지만 4스테이지의 첫 구역이다.
+STAGE_GROUPS = ((0,), (1, 2), (3,), (9, 4, 5), (6,), (7, 8))
 STAGE_TITLES = (
     '01  잔향의 문', '02  사냥꾼과 간수', '03  염력의 하늘 땅',
     '04  격리실과 대마녀', '05  두 번째 잔향', '06  마지막 잔향',

@@ -4,7 +4,7 @@
   "echo_silver_gold.png": "분신_은빛_금빛.png",
   "monster_01_hornbeast.png": "몬스터_01_뿔짐승.png",
   "monster_01_hornbeast_walk_parts.png": "몬스터_01_뿔짐승_걷기_부위.png",
-  "monster_02_stone_warden.png": "몬스터_02_돌_수호자.png",
+  "monster_02_stone_warden.png": "monster_concepts/몬스터_02_돌_수호자.png",
   "monster_03_watcher.png": "몬스터_03_외눈유령.png",
   "monster_03_watcher_move.png": "몬스터_03_외눈유령_이동.png",
   "monster_spider.png": "몬스터_거미.png",
@@ -127,5 +127,6 @@
   "attack_fx/chain-whip.png": "attack_fx/사슬_채찍.png",
   "attack_fx/dirt-explosion.png": "attack_fx/흙_폭발.png",
   "attack_fx/ground-slam.png": "attack_fx/땅_내려치기.png",
-  "attack_fx/rock.png": "attack_fx/바위.png"
+  "attack_fx/rock.png": "attack_fx/바위.png",
+  "attack_fx/portal.png": "attack_fx/민트_포탈.png"
 }

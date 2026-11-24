@@ -4,6 +4,7 @@
 (2) 분신 없이 달리며 베기만 해서는 못 깨는지를 확인한다.
 SOLUTIONS는 막혔을 때 읽는 공략집이기도 하다.
 """
+import copy
 import sys
 
 import boss_skills
@@ -340,7 +341,7 @@ def stage_2(b):
     b.rec()
     # 재현 분신도 녹화 때와 같은 때에 움직이는 발판을 만나 똑같이 오른다.
     b.until(lambda w: w.echo is not None and w.echo.actor.base >= 270, limit=8)
-    b.go(2140, slash=False)
+    b.go(2100, slash=False)              # 스위치가 연 민트색 포탈
 
 
 @solution(3)
@@ -434,6 +435,97 @@ def stage_4(b):
     assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
     descend(-1)
     b.go(1240)
+
+
+@solution(10)
+def stage_10(b):
+    """마녀의 실험 금고: 물약 슬라임 분신이 포털을 던지고, 마법책 분신이 포털 붙은 땅을 금고에 밀어 넣는다."""
+    def attempt(w, frames, facing):
+        """facing 쪽을 보고 F를 frames 프레임 눌렀다 떼고, 물약이 떨어질 때까지 기다린다. 새 포털을 돌려준다."""
+        slot = w.portal_next
+        steps = 0
+        if w.recording.preview.facing != facing:
+            w.step(Motion(facing))
+            steps += 1
+        for _ in range(frames):
+            w.step(Motion(web_aiming=True))
+        w.step(Motion())
+        steps += frames + 1
+        while w.potions and w.recording is not None:
+            w.step(Motion())
+            steps += 1
+        return (w.portals[slot] if w.portal_next != slot else None), steps
+
+    def throw(wanted, facings=(1, -1)):
+        """wanted(포털)이 참이 되는 힘과 방향을 미리 돌려 보고 그대로 던진다. 없으면 한 프레임 기다린다."""
+        for _ in range(round(15 / STEP)):
+            for facing in facings:
+                for frames in range(0, 61, 3):
+                    portal, _ = attempt(copy.deepcopy(b.w), frames, facing)
+                    if portal is not None and wanted(portal):
+                        portal, steps = attempt(b.w, frames, facing)
+                        b.frames += steps
+                        assert portal is not None and wanted(portal), f'미리 본 대로 떨어지지 않았습니다 {b}'
+                        return
+            b.tick()
+        raise AssertionError(f'물약을 맞힐 때를 찾지 못했습니다 {b}')
+
+    def enter():
+        """본체가 가까운 포털로 걸어 들어가 다른 쪽 포털로 나온다."""
+        points = [b.w.portal_point(i) for i in range(2)]
+        index = min(range(2), key=lambda i: abs(points[i][1] - b.me.x))
+        for _ in range(round(10 / STEP)):
+            _, x, height = b.w.portal_point(1 - index)
+            if abs(b.me.x - x) < 1 and b.me.base == height:
+                return
+            gap = b.w.portal_point(index)[1] - b.me.x
+            b.tick(0 if abs(gap) < 2 else 1 if gap > 0 else -1)
+        raise AssertionError(f'포털로 들어가지 못했습니다 {b}')
+
+    def on_ground(near, far):
+        return lambda p: p[1] is None and p[3] == 0 and near <= p[2] <= far
+
+    b.kill('potion_slime')
+    b.kill('magic_book')
+    # [창살 방] 발밑(왼쪽)과 창살 너머에 포털 한 쌍
+    b.go(600)
+    b.w.start_recording('potion_slime')
+    throw(on_ground(500, 600), (-1,))
+    throw(on_ground(670, 800), (1,))
+    b.rec()
+    enter()
+    assert b.me.x > 650, f'창살을 건너지 못했습니다 {b}'
+    # [독 수조] 떠다니는 땅 A(0번)에 포털을 붙이고 건너가 실려 간다
+    b.go(790)
+    b.w.start_recording('potion_slime')
+    throw(on_ground(700, 800), (-1,))
+    throw(lambda p: p[1] == 0)
+    b.rec()
+    enter()
+    b.until(lambda w: w.sky_blocks[0][0] >= 1150)
+    for _ in range(round(3 / STEP)):
+        if b.me.base == 0 and not b.me.fall_speed and b.me.x > 1300:
+            break
+        b.tick(1)
+    assert b.me.x > 1300 and b.me.base == 0, f'독 수조를 건너지 못했습니다 {b}'
+    # [봉인 금고] 땅 B(1번)에 포털을 붙이고, 마법책 분신이 땅 B를 금고 안으로 끌어 놓는다
+    b.go(1500)
+    b.w.start_recording('potion_slime')
+    throw(on_ground(1400, 1490), (-1,))
+    throw(lambda p: p[1] == 1)
+    b.rec()
+    b.w.start_recording('magic_book')
+    b.go(1720)
+    b.until(lambda w: w.sky_grab(*w.sky_blocks[1]), limit=8)
+    b.w.sky_drag(1900, 290)
+    b.w.sky_release()
+    b.rec()
+    _, x, height = b.w.portal_point(1 - b.w.portal_next)
+    assert 1780 < x < 2120, f'포털이 금고에 들어가지 않았습니다 {b} {x}'
+    enter()
+    b.go(2050)
+    assert b.w.portal_open, f'금고 스위치가 눌리지 않았습니다 {b}'
+    b.go(2155)
 
 
 @solution(5)
@@ -678,6 +770,17 @@ def check_late_stage_monsters():
 
 def check_puzzles():
     """기획서 그림대로 바꾼 장치가 분신 없이는 통과되지 않는지 확인한다."""
+    # 마녀의 실험 금고: 금고 결계에 닿은 물약은 깨지고, 독 수조 위 땅 A는 염력으로 잡히지 않는다.
+    w = World(9)
+    w.enemies = []
+    w.potions.append([1900, 0, 400, 0, 0])
+    for _ in range(round(1 / STEP)):
+        w.step(Motion())
+    assert not w.potions and w.portals == [None, None], ('결계 안에 포털이 생겼습니다', w.portals)
+    w.player.x = w.sky_blocks[0][0] - 150
+    w.start_recording('magic_book')
+    assert not w.sky_grab(*w.sky_blocks[0]), '염력이 통하지 않아야 할 땅을 잡았습니다'
+
     # 점프맵: 보통 점프로는 첫 발판(높이 90)에 오르지 못하고, 스위치 없이는 잠긴 문을 못 지난다.
     w = World(1)
     w.enemies = []
@@ -696,6 +799,15 @@ def check_puzzles():
     for _ in range(round(3 / STEP)):
         w.step(Motion(-1))
     assert w.result == 'defeated' and not w.revealed, ('3·4층 구덩이에 떨어지지 않았습니다', w.player)
+    # 3·4층 출구는 왼쪽 위 스위치가 포탈을 열기 전엔 비어 있어 들어가지 못한다.
+    w = World(1)
+    w.enemies = []
+    w.player.floor, w.player.x = w.stage.exit.floor, w.stage.exit.x
+    w.step(Motion())
+    assert w.result == 'playing' and not w.portal_open, '스위치 없이 포탈로 나갔습니다'
+    w.switched[1] = True
+    w.step(Motion())
+    assert w.result == 'cleared', '스위치가 연 포탈로 나가지 못했습니다'
 
     # 하늘 땅: 빠진 단이 있어 디딤돌만으로는 스위치 턱에 못 오르고, 출구는 1→2→3을 다 밟기 전엔 잠겨 있다.
     w = World(3)

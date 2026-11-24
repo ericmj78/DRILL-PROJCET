@@ -2,7 +2,7 @@ import json
 import sdl2
 from copy import copy
 from ctypes import byref, c_int
-from math import cos, hypot, sin
+from math import cos, hypot, pi, sin
 from os import environ
 from pathlib import Path
 from time import perf_counter
@@ -28,7 +28,7 @@ from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
 from stages import PLATE_RANGE, Point
-from world import JUMP_DURATION, LIGHT_BELOW, SPIDER_AIM_REACH, WATCH_RANGE
+from world import JUMP_DURATION, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -237,7 +237,6 @@ class View:
         self.player = load_asset('player_idle_pixel.png')
         self.player_jump = load_asset('player_jump_pixel.png')
         self.player_sword_jump = load_asset('player_sword_jump_pixel.png')
-        self.jailer_chain_slam = load_asset('monster_concepts/prison-jailer-long-chain-slam-concept.png')
         self.jester_walk = load_asset('monster_concepts/broken-jester-walk-16.png')
         self.knight_sheets = {
             name: load_asset(f'monster_concepts/echo-knight-{name}-sheet.png')
@@ -385,7 +384,7 @@ class View:
         self.camera_x = self.free_camera_x if self.free_camera else min(WIDTH, max(0, focus.x - WIDTH * 0.60))
         if world.stage.floor_height == 400:
             self.camera_lift = 0.0
-        if world.index in (0, 1, 3, 4):
+        if world.index in (0, 1, 3, 4, 9):
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
@@ -678,6 +677,45 @@ class View:
             x, y = sx - self.camera_x, floor_y + height
             draw_grounded(self.lever_art, LEVER_FRAMES[on], x, y, 34)
             self.heading.draw(x - 7, y + 52, str(index + 1), CYAN if on else GOLD)
+
+    def _draw_potions(self, world):
+        """물약 슬라임: 결계 금고, 포털 한 쌍(파랑·주황), 날아가는 물약, F로 모으는 동안의 예상 궤적."""
+        colors = ((80, 170, 255), (255, 150, 60))
+        for left, bottom, right, top in world.stage.seals:
+            # 결계 금고: 돌 벽과 천장, 안쪽은 청록 결계가 일렁인다.
+            x1, x2 = left - self.camera_x, right - self.camera_x
+            y1, y2 = self.floor_y[0] + bottom, self.floor_y[0] + top
+            alpha = 34 + int(14 * sin(world.time * 3))
+            self._polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y1), (x2, y2), (x1, y2)], [(110, 230, 230, alpha)] * 6)
+            box(x1, y2, x2, y2 + 18, (70, 62, 96))
+            box(x2 - 14, y1, x2, y2, (70, 62, 96))
+            box(x1, y1, x2, y2 + 18, GOLD, filled=False)
+            for k in range(6):
+                yy = y1 + 20 + k * (y2 - y1 - 30) / 5
+                line(x1, yy, x1 + 8, yy + 8, CYAN)
+            self.small.draw(x1 + 10, y2 + 34, '봉인 금고 · 물약은 결계에 깨진다', GOLD)
+        for index in range(2):
+            if world.portals[index] is None:
+                continue
+            floor, px, height = world.portal_point(index)
+            cx, cy = px - self.camera_x, self.floor_y[floor] + height + 30
+            for grow in (6, 3, 0):
+                ring = [(cx + (14 + grow) * cos(a / 12 * pi), cy + (30 + grow) * sin(a / 12 * pi)) for a in range(25)]
+                for (ax, ay), (bx, by) in zip(ring, ring[1:]):
+                    line(ax, ay, bx, by, colors[index] if grow == 0 else tuple(c // 2 for c in colors[index]))
+        for x, floor, height, vx, vh in world.potions:
+            self._disc(x - self.camera_x, self.floor_y[floor] + height, 6, colors[world.portal_next])
+        recording = world.recording
+        if recording is not None and recording.monster_kind == 'potion_slime' and recording.preview.potion_charge > 0:
+            x, floor, height, vx, vh = potion_launch(recording.preview)
+            for k in range(1, 60):
+                t = k * 0.04
+                h = height + vh * t - POTION_GRAVITY * t * t / 2
+                if h < -40:
+                    break
+                if k % 2 == 0:
+                    self._disc(x + vx * t - self.camera_x, self.floor_y[floor] + h, 2.5,
+                               colors[world.portal_next], sides=6)
 
     def _disc(self, x, y, radius, color, sides=14):
         points, colors = [], []
@@ -989,11 +1027,14 @@ class View:
             sx, sy = switch.x - self.camera_x, self.floor_y[switch.floor] + switch.height
             draw_grounded(self.lever_art, LEVER_FRAMES[on], sx, sy, 34)
             self.small.draw(sx - 22, sy + 45, '스위치', CYAN if on else GOLD)
+            if switch.door is None:
+                continue   # 출구 포탈 스위치: 문 대신 출구에 포탈이 생긴다
             dx, dy = switch.door.x - self.camera_x, self.floor_y[switch.door.floor]
             draw_grounded(self.gate_art, GATE_FRAMES[on], dx, dy, 112)
             self.small.draw(dx - 22, dy + 124, '열린 문' if on else '잠긴 문', CYAN if on else GOLD)
         if stage.sky:
             self._draw_sky_puzzle(world)
+        self._draw_potions(world)
         for actor in world._watchers():
             if actor.radar and actor.elevator_target is None:
                 x = actor.x - self.camera_x
@@ -1081,6 +1122,11 @@ class View:
                 self.small.draw(lx - 20, ly + 45, 'E 레버', CYAN if state.latched else GOLD)
 
         x, y = stage.exit.x - self.camera_x, self.floor_y[stage.exit.floor]
+        if any(switch.door is None for switch in stage.switches):
+            # 출구 포탈: 스위치를 누르면 민트색 포탈(pixelfx arcane/portal)이 열린다. 그 전엔 아무것도 없다.
+            if world.portal_open:
+                draw_sheet(self.attack_fx['portal'], world.time, x, y, 1, 2)
+            return
         if world.index == 0:
             frame = int(world.time * 8) % 6
             self.pixel_sprites.blit(self.pixel_sprites.prop(('exit', frame), lambda: pixel_sprites.draw_exit(frame)),
@@ -1094,35 +1140,6 @@ class View:
         self.small.draw(x - 35 if locked or sky_locked else x - 15, y + 116,
                         '보스 처치 필요' if locked else '1→2→3 스위치' if sky_locked else '출구',
                         RED if locked or sky_locked else CYAN)
-
-    def _draw_jailer_chain(self, actor, floor_y, phase, tint, size):
-        # Source rectangles and foot anchors keep the boss fixed as the chain extends.
-        frames = (
-            (0, 160, 300, 398, 205),
-            (300, 160, 270, 398, 470),
-            (570, 160, 255, 398, 730),
-            (825, 160, 465, 398, 1160),
-            (1290, 160, 520, 398, 1680),
-            (1810, 160, 362, 398, 2070),
-        )
-        name, progress = phase
-        if name == 'telegraph':
-            index = min(3, int(progress * 4))
-        elif name == 'active':
-            index = 4
-        else:
-            index = 5 if progress < 0.75 else 0
-        left, top, width, height, anchor = frames[index]
-        scale = size / 250
-        # Source art faces left. Reflect both sprite and its anchor for facing right.
-        flipped = actor.facing > 0
-        offset = (left + width - anchor) if flipped else (anchor - left)
-        x = actor.x - offset * scale
-        y = floor_y - 10 * scale
-        canvas.SDL_SetTextureColorMod(self.jailer_chain_slam.texture, *tint)
-        draw_region(self.jailer_chain_slam, (left, top, width, height), x, y,
-                    width * scale, height * scale, flipped)
-        canvas.SDL_SetTextureColorMod(self.jailer_chain_slam.texture, 255, 255, 255)
 
     def _draw_slime_trail(self, world):
         """물약 슬라임이 지나간 자리에 물약 자국을 남긴다. 자국은 PUDDLE_SECONDS 동안 옅어지며 사라진다."""
@@ -1163,7 +1180,8 @@ class View:
                                                 enemy.windup, enemy.recovery, tint=tint)
             elif enemy.spawn.kind in monster_sprite.ANYWHERE:   # PixelLab 시트: 이동·공격이 시트 안에 있다
                 self.monster_sprite.draw(enemy.spawn.kind, screen_enemy.actor, y, world.time,
-                                         enemy.windup, enemy.recovery, tint=tint)
+                                         enemy.windup, enemy.recovery, tint=tint,
+                                         skill=(enemy.skill, *skill_phase) if skill_phase else None)
             elif enemy.spawn.kind == 'echo_knight':
                 self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
                 if skill_phase is None and pose is not None:
@@ -1176,8 +1194,6 @@ class View:
                 if pose is not None:
                     draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
                                        enemy.windup, enemy.recovery)
-            elif enemy.spawn.kind == 'jailer_boss' and enemy.skill == 'chain' and skill_phase is not None:
-                self._draw_jailer_chain(screen_enemy.actor, y, skill_phase, tint, kind.size)
             elif pose is not None:
                 # 공격 중에는 monster_attack.py의 자세 스크립트대로 그린다.
                 actor = screen_enemy.actor

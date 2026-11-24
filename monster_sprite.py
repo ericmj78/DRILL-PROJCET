@@ -1,4 +1,4 @@
-"""도트 몬스터(거미, 외눈 유령, 마법책, 물약 슬라임) 시트를 그린다. 시트는 PixelLab으로 만든다 (assets/PixelLab/몬스터).
+"""도트 몬스터(거미, 외눈 유령, 마법책, 물약 슬라임, 뿔짐승, 쇠사슬 간수, 대마녀) 시트를 그린다. 시트는 PixelLab으로 만든다 (assets/PixelLab/몬스터).
 
 원본 그림은 왼쪽을 보므로 오른쪽을 볼 때 뒤집는다. 그림 한 칸 = 화면 1px.
 떠도는 유령은 외눈 유령 시트를 작게, 보랏빛 반투명으로 그린다.
@@ -23,8 +23,15 @@ BOOK = {'sheet': 'PixelLab/몬스터/book', 'size': (160, 128), 'feet': 120, 'ce
 SLIME = {'sheet': 'PixelLab/몬스터/slime', 'size': (160, 128), 'feet': 122, 'center': 86}
 # 뿔짐승(pixellab_beast.py): 걷기 8, 공격 8(머리를 낮췄다가 몸을 뻗어 덮친다), 대기 4. 줄 순서는 거미와 같다.
 BEAST = {'sheet': 'PixelLab/몬스터/beast', 'size': (224, 128), 'feet': 122, 'center': 130}
-WALKERS = frozenset(('crawler', 'potion_slime', 'beast'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
-ANYWHERE = frozenset(('magic_book', 'potion_slime', 'beast'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
+# 1스테이지 보스 쇠사슬 간수(pixellab_jailer.py): 걷기·공격·대기 다음에 기술 줄(쇠사슬, 낙석, 돌진)이 있다.
+# 화면 키가 약 280이라 PixMiniMax 칸(256)에 안 들어가 절반 크기로 만들고 2배로 그린다.
+JAILER = {'sheet': 'PixelLab/몬스터/jailer', 'size': (256, 176), 'feet': 170, 'center': 173, 'scale': 2,
+          'skills': {'chain': 3, 'rockfall': 4, 'charge': 5}}
+# 2스테이지 보스 대마녀(pixellab_witch.py): 간수와 같은 줄 배치, 기술은 중력·낙뢰·마력 구체. 2배로 그린다.
+GRAND_WITCH = {'sheet': 'PixelLab/몬스터/grand_witch', 'size': (256, 176), 'feet': 170, 'center': 144, 'scale': 2,
+               'skills': {'gravity': 3, 'bolts': 4, 'orb': 5}}
+WALKERS = frozenset(('crawler', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
+ANYWHERE = frozenset(('magic_book', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
 
 
 def attack_frame(windup, recovery):
@@ -36,26 +43,41 @@ def attack_frame(windup, recovery):
     return None
 
 
+def skill_frame(phase, progress):
+    """기술 줄의 칸 번호: 예고 0~3, 발동 4~6, 빈틈 7(기본 자세)."""
+    if phase == 'telegraph':
+        return min(3, int(progress * 4))
+    if phase == 'active':
+        return 4 + min(2, int(progress * 3))
+    return 7
+
+
 class MonsterSprite:
     def __init__(self, load):
-        self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME, beast=BEAST)
+        self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME, beast=BEAST,
+                         jailer_boss=JAILER, grand_witch=GRAND_WITCH)
         self.sheets = {(kind, echo): load(f'{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
+        for image in self.sheets.values():   # 2배로 키우는 보스도 도트가 흐려지지 않게
+            sdl2.SDL_SetTextureScaleMode(image.texture, sdl2.SDL_ScaleModeNearest)
 
     def draw(self, kind, actor, floor_y, time, windup=0.0, recovery=0.0, opacity=255,
-             tint=(255, 255, 255), echo=False):
+             tint=(255, 255, 255), echo=False, skill=None):
+        """skill: 보스 기술 (이름, 단계, 진행도) 또는 None. 기술 줄이 있는 몬스터만 쓴다."""
         ghost = kind == 'tier_ghost'
         base = 'watcher' if ghost else kind
         info = self.meta[base]
         width, height = info['size']
+        scale = info.get('scale', 1) * (GHOST_SCALE if ghost else 1.0)
         frame = attack_frame(windup, recovery)
-        if frame is not None:
+        if skill is not None and skill[0] in info.get('skills', {}):
+            row, column = info['skills'][skill[0]], skill_frame(*skill[1:])
+        elif frame is not None:
             row, column = 1, frame
-        elif base in WALKERS:
-            row, column = (0, int(actor.walk_distance / 10) % 8) if actor.moving else (2, int(time * 3) % 4)
+        elif base in WALKERS:   # 크게 그리는 몬스터는 보폭도 그만큼 길다
+            row, column = (0, int(actor.walk_distance / (10 * scale)) % 8) if actor.moving else (2, int(time * 3) % 4)
         else:   # 떠다니기. 여러 마리가 같은 박자로 흔들리지 않게 위치로 어긋나게 한다.
             row, column = 0, int(time * 8 + actor.x * 0.05) % 16
-        scale = GHOST_SCALE if ghost else 1.0
         if ghost and not echo:
             tint = tuple(min(a, b) for a, b in zip(tint, GHOST_TINT))
             opacity = min(opacity, GHOST_ALPHA)

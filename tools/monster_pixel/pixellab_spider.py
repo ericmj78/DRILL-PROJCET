@@ -98,6 +98,12 @@ def make_base(src_path, look=LOOK, width=WIDTH, size=(W, H), left=LEFT, feet=FEE
             if px[x, y][3] and min(px[x, y][:3]) >= 235:
                 px[x, y] = (0, 0, 0, 0)
     img = img.crop(img.getbbox())
+    if max(img.size) > 200:   # /resize는 200px 넘는 그림을 받지 않는다: 먼저 평균 축소 + 원래 팔레트로 맞춘다
+        palette = sorted({c[:3] for c in img.get_flattened_data() if c[3]})
+        k = 200 / max(img.size)
+        img = img.resize((round(img.width * k), round(img.height * k)), Image.BOX)
+        img.putalpha(img.getchannel('A').point(lambda v: 255 if v > 110 else 0))
+        img = to_palette(img, palette)
     target = {'width': width, 'height': round(img.height * width / img.width)}
     img = unb64(call('POST', '/resize', {
         'description': look, 'reference_image': b64(img),
@@ -127,12 +133,13 @@ def lunge(frame, dx):
 
 
 def build_sheet(base, rows, spec=ROWS, push=LUNGE):
-    """rows: 이름 → 생성된 칸 목록(animate_pm 결과). 걷기·대기는 0번부터, 공격은 1번부터 쓰고 push만큼 옮긴다."""
+    """rows: 이름 → 생성된 칸 목록(animate_pm 결과). 걷기·대기는 0번부터, 공격·기술은 1번부터 쓰고
+    공격은 push만큼 옮긴다 (마지막 칸 = 기본 자세라 끝나면 제자리로 돌아온다)."""
     w, h = base.size
     palette = sorted({c[:3] for c in base.get_flattened_data() if c[3]})
     sheet = Image.new('RGBA', (w * 8, h * len(spec)), (0, 0, 0, 0))
     for row, (name, count, _, _) in enumerate(spec):
-        frames = rows[name][1:count + 1] if name == 'attack' else rows[name][:count]
+        frames = rows[name][:count] if name in ('walk', 'idle') else rows[name][1:count + 1]
         for column, frame in enumerate(frames):
             frame = drop_specks(to_palette(frame, palette), keep=30)
             if name == 'attack':
