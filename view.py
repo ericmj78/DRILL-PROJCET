@@ -223,7 +223,8 @@ class View:
             for name in ('walk', 'attack', 'charge', 'orb', 'bolts')
         }
         self.echo = load_asset('echo_silver_gold.png')
-        self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
+        self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()
+                        if asset_path(kind.image).exists()}   # 그림을 지운 몬스터(지금 맵에 없는 돌 수호자 등)는 건너뛴다
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
         actors = walk_data['actors']
         detailed_echo = load_asset('echo_detailed_sheet.png')
@@ -253,25 +254,16 @@ class View:
             for name, gait in MONSTER_GAITS.items()
             if asset_path(gait.sheet).exists()   # 새 시트로 바꾸려고 지운 부위 그림은 건너뛰고 서 있는 그림으로 그린다
         }
-        watcher = actors['watcher']
-        self.enemy_walk['watcher'] = WalkCycle(
-            load_asset(watcher['sheet']), watcher['frames'],
-            watcher['draw_height'], watcher['stride_per_frame'],
-        )
         spider = load_asset('monster_spider_walk_sheet.png')
         cell_w, cell_h = spider.w // 4, spider.h // 2
         spider_frames = [(column * cell_w, row * cell_h + round(cell_h * 0.20),
                           cell_w, round(cell_h * 0.65))
                          for row in range(2) for column in range(4)]
         self.enemy_walk['crawler'] = WalkCycle(spider, spider_frames, 70, 9)
-        self.enemy_walk['tier_ghost'] = self.enemy_walk['watcher']
         for name, asset in (
-            ('jailer_boss', 'prison-jailer-boss'), ('magic_armor', 'magic-armor'),
-            ('magic_armor_guard', 'magic-armor'),
-            ('witch', 'witch'), ('grand_witch', 'grand-witch-boss'),
+            ('magic_armor', 'magic-armor'), ('magic_armor_guard', 'magic-armor'), ('witch', 'witch'),
         ):
-            suffix = '-walk-transparent.png' if name == 'grand_witch' else '-walk.png'
-            sheet = load_asset(f'monster_concepts/{asset}{suffix}')
+            sheet = load_asset(f'monster_concepts/{asset}-walk.png')
             width, height = sheet.w // 4, sheet.h // 2
             frames = [(column * width, row * height, width, height)
                       for row in range(2) for column in range(4)]
@@ -1101,7 +1093,7 @@ class View:
                     image = self.enemies[enemy.spawn.kind]
                     draw_posed(image, (0, 0, image.w, image.h), x, y, kind.size, actor.facing, pose, tint)
                 draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
-            elif enemy.spawn.kind in ('jailer_boss', 'magic_armor', 'magic_armor_guard', 'witch', 'grand_witch'):
+            elif enemy.spawn.kind in ('magic_armor', 'magic_armor_guard', 'witch'):
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
             elif enemy.actor.moving and enemy.spawn.kind in self.enemy_walk:
                 self.enemy_walk[enemy.spawn.kind].draw(
@@ -1663,7 +1655,8 @@ class View:
                  ('broken_jester', '후반 구역을 순찰하는 광대 인형입니다.'),
                  ('echo_knight', '보스. 돌진, 마력 구체, 낙뢰를 사용합니다.')),
             )
-            for i, (kind, description) in enumerate(groups[menu.guide_page - 2]):
+            shown = [(kind, text) for kind, text in groups[menu.guide_page - 2] if kind in self.enemies]
+            for i, (kind, description) in enumerate(shown):
                 col, row = i % 2, i // 2
                 x, y = 95 + col * 485, 475 - row * 105
                 image = self.enemies[kind]
