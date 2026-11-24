@@ -1,4 +1,4 @@
-"""1스테이지 장식물을 이미지 없이 4px 도트로 찍는다 (주인공 hero_sprite.py, 몬스터 monster_sprite.py) (1스테이지 배경 stage1_pixel.py와 같은 화풍).
+"""1스테이지 장식물을 이미지 없이 4px 도트로 찍는다 (주인공 hero_sprite.py, 몬스터 monster_sprite.py).
 
 몸을 머리·몸통·팔다리·망토·무기 같은 부품으로 나누고, 프레임마다 자세(관절 각도)를 정해
 도트 격자(Grid)에 찍는다. 부품마다 빛 방향(왼쪽 위)에 따라 밝은 면·기본·그늘 세 단계로 칠하고,
@@ -156,39 +156,6 @@ RUNE_ON = ((110, 240, 230), (60, 190, 190), (210, 255, 250))
 WOOD = ((126, 88, 56), (90, 62, 40), (160, 116, 76))
 
 
-def draw_plate(pressed):
-    """압력 발판: 돌판 가운데 룬이 있다. 밟으면 한 도트 가라앉고 청록으로 빛난다."""
-    grid = Grid(18, 5, 9)
-    top = 2.4 if pressed else 3.4
-    grid.capsule((-7.5, 1.0), (7.5, 1.0), 1.2, STONE_DARK)
-    grid.poly([(-7.0, 1.0), (7.0, 1.0), (6.2, top), (-6.2, top)], STONE)
-    rune = RUNE_ON if pressed else GOLD
-    for x in (-3, -1, 1, 3):
-        grid.dot(x, top - 0.6, rune[2] if pressed else rune[0])
-    grid.outline()
-    return grid
-
-
-def draw_gate(opened):
-    """쇠창살 문. opened 0이면 닫힘, 1이면 창살이 끝까지 올라간다. 양옆 돌기둥은 그대로다."""
-    grid = Grid(14, 30, 7)
-    for side in (-1, 1):   # 돌기둥과 꼭대기 쐐기돌
-        grid.poly([(side * 4.5, 0), (side * 6.6, 0), (side * 6.6, 27.5), (side * 4.5, 27.5)], STONE_DARK)
-        for y in (6.5, 13.5, 20.5):
-            grid.dot(side * 5.5, y, STONE_DARK[1])
-    grid.poly([(-6.8, 27.0), (6.8, 27.0), (6.2, 29.5), (-6.2, 29.5)], STONE)
-    grid.dot(0, 28.2, GOLD[0])
-    bottom = 26.0 * opened
-    for x in (-3.4, -1.2, 1.2, 3.4):   # 세로 창살과 아래 뾰족한 끝
-        grid.capsule((x, bottom + 0.8), (x, 27.0), 0.55, IRON)
-        grid.dot(x, bottom, IRON[2])
-    for y in (bottom + 6, bottom + 14, bottom + 21):
-        if y < 26.5:
-            grid.capsule((-4.0, y), (4.0, y), 0.5, IRON)
-    grid.outline()
-    return grid
-
-
 def draw_lift():
     """승강기 발판: 나무판에 쇠 테두리와 금 장식."""
     grid = Grid(20, 6, 10)
@@ -198,29 +165,6 @@ def draw_lift():
     grid.capsule((-8.6, 3.6), (8.6, 3.6), 0.6, IRON)
     for x in (-8.0, 8.0):
         grid.dot(x, 2.0, GOLD[0])
-    grid.outline()
-    return grid
-
-
-def draw_statue(width_dots, height_dots):
-    """조각상 (가고일): 받침 위에 웅크리고 박쥐 날개를 뒤로 펼쳤다. 거미줄을 붙이는 곳이라 아랫면은 평평하다."""
-    grid = Grid(width_dots + 2, height_dots + 2, (width_dots + 2) // 2)
-    half, h = width_dots / 2, height_dots
-    grid.poly([(-half + 1, 0.3), (half - 1, 0.3), (half - 2, 2.3), (-half + 2, 2.3)], STONE_DARK)   # 받침
-    wing = [(0.0, h * 0.5), (-half * 0.25, h * 0.95), (-half * 0.8, h * 1.0), (-half * 0.62, h * 0.78),
-            (-half * 0.95, h * 0.66), (-half * 0.68, h * 0.5), (-half * 0.85, h * 0.36), (-2.0, h * 0.3)]
-    grid.poly(wing, STONE)
-    for tip in (wing[2], wing[4], wing[6]):   # 날개 뼈
-        grid.capsule((-0.5, h * 0.52), tip, 0.35, STONE_DARK)
-    grid.ellipse((-0.8, 2.3 + h * 0.26), half * 0.36, h * 0.25, STONE)                              # 몸
-    grid.capsule((half * 0.15, 2.4), (half * 0.25, 2.3 + h * 0.2), 0.9, STONE)                     # 앞다리
-    grid.capsule((-half * 0.45, 2.4), (-half * 0.3, 2.3 + h * 0.15), 0.9, STONE_DARK)              # 뒷다리
-    head = (half * 0.32, h * 0.62)
-    grid.ellipse(head, 2.4, 2.1, STONE)
-    for dx in (-1.3, 0.3):   # 뿔
-        grid.capsule((head[0] + dx, head[1] + 1.5), (head[0] + dx - 1.2, head[1] + 3.4), 0.45, STONE_DARK)
-    grid.capsule((head[0] + 1.4, head[1] - 0.5), (head[0] + 3.0, head[1] - 0.9), 0.75, STONE)        # 주둥이
-    grid.dot(head[0] + 0.9, head[1] + 0.4, (255, 120, 90))                                          # 빛나는 눈
     grid.outline()
     return grid
 

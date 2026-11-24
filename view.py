@@ -10,7 +10,7 @@ from time import perf_counter
 from pico2d import draw_line, draw_rectangle, load_font, load_image
 from pico2d import pico2d as canvas
 
-from animation import AttackCycle, WalkCycle, draw_region
+from animation import WalkCycle, draw_region
 from asset_paths import asset_path
 import boss_skills
 import late_monster_motion
@@ -18,7 +18,6 @@ from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_she
 from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
 from poison_fx import PoisonFx
-from stage1_pixel import PixelBackdrop
 import pixel_sprites
 from pixel_sprites import PixelSprites
 from hero_sprite import HeroSprite
@@ -178,12 +177,9 @@ class View:
         # 하늘 섬 날갯짓 (PixelLab, tools/monster_pixel/pixellab_sky_island.py): 가로 8칸, 한 칸 176 × 80, 돌 윗면 35줄
         self.sky_island_art = load_asset('PixelLab/스테이지/sky_island.png')
         sdl2.SDL_SetTextureScaleMode(self.sky_island_art.texture, sdl2.SDL_ScaleModeNearest)
-        self.late_two_floor_art = load_asset('map_sections/stage-08-late-two-floors.png')
         self.late_three_floor_art = load_asset('map_sections/echo-knight-approach-three-floors-concept.png')
         self.late_arcane_castle = load_asset('map_sections/late_arcane_castle.png')
         self.late_arcane_arena = load_asset('map_sections/late_arcane_arena.png')
-        self.echo_boss_arena = load_asset('map_sections/echo-knight-arena-concept.png')
-        self.prison_boss_arena = load_asset('map_sections/stage-03-boss-arena.png')
         self.witch_boss_arena = load_asset('map_sections/stage-07-witch-boss-arena.png')
         floor_counts = (3, 3, 4, 4, 4, 4, 6, 3, 3)
         self.floor_images = {
@@ -218,25 +214,17 @@ class View:
         sdl2.SDL_SetTextureScaleMode(self.pixel_statue_art.texture, sdl2.SDL_ScaleModeNearest)
         self.statue_chain_art = load_asset('1스테이지_조각상_쇠사슬.png')
         sdl2.SDL_SetTextureScaleMode(self.statue_chain_art.texture, sdl2.SDL_ScaleModeNearest)
-        self.poison_art = load_asset('1스테이지_독구간.png')
         self.poison_rest_art = load_asset('2층_수로_돌발판.png')
         self.poison_wall_art = load_asset('2층_수로_돌벽.png')
         self.poison_fx = PoisonFx()
-        self.pixel_backdrop = PixelBackdrop()
         self.pixel_sprites = PixelSprites()   # 1스테이지 장식물 도트
         self.hero_sprite = HeroSprite(load_asset)   # 모든 스테이지의 도트 주인공 (PixelLab)
         self.monster_sprite = MonsterSprite(load_asset)   # 1스테이지 도트 거미·외눈 유령
         self.stage1_folder_monsters = monster_sprite.StageOneFolderMonsters(load_asset)
-        self.gate_lift = {}                   # 문 창살이 올라간 정도 (0~1)
         self.exit_art = load_asset('dungeon_props/exit-portal.png')
         self.ladder_art = load_asset('dungeon_props/ladder.png')
         self.lever_art = load_asset('dungeon_props/lever.png')
         self.puzzle_art = load_asset('puzzle_concepts/echo-puzzle-props-concept.png')
-        self.weapon_art = load_asset('dungeon_props/weapon-atlas.png')
-        self.hero_sword_art = load_asset('weapons/sword-slim.png')
-        self.player = load_asset('player_idle_pixel.png')
-        self.player_jump = load_asset('player_jump_pixel.png')
-        self.player_sword_jump = load_asset('player_sword_jump_pixel.png')
         self.jester_walk = load_asset('monster_concepts/broken-jester-walk-16.png')
         self.knight_sheets = {
             name: load_asset(f'monster_concepts/echo-knight-{name}-sheet.png')
@@ -246,23 +234,6 @@ class View:
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()}
         walk_data = json.loads((ASSETS / 'walk_sheets.json').read_text(encoding='utf-8'))
         actors = walk_data['actors']
-        player_walk = load_asset('player_walk_pixel.png')
-        cell_w = player_walk.w // 8
-        player_frames = [(column * cell_w, 260, cell_w, 245) for column in range(8)]
-        self.player_walk = WalkCycle(player_walk, player_frames, 103, actors['player']['stride_per_frame'])
-        # 걸음에 맞춰 검이 흔들리는 시트. tools/make_sword_walk.py로 integrated 시트에서 만든다.
-        self.player_sword_unified = load_asset('player_sword_unified_pixel.png')
-        self.player_sword_idle = load_asset('player_sword_idle_pixel.png')
-        self.player_attack = AttackCycle(
-            load_asset('player_attack_pixel.png'),
-            [
-                [25, 33, 495, 658],
-                [543, 33, 543, 658],
-                [1086, 33, 543, 658],
-                [1654, 33, 518, 658],
-            ],
-            draw_height=103,
-        )
         detailed_echo = load_asset('echo_detailed_sheet.png')
         detailed_width = detailed_echo.w // 8
         detailed_height = detailed_echo.h // 3
@@ -1392,54 +1363,10 @@ class View:
         end = self.floor_y[actor.elevator_target]
         return start + (end - start) * abs(actor.elevator_offset)
 
-    def _draw_weapon(self, actor, index, floor_y, progress, opacity, attack_kind, pose=None):
-        region, height, grip = WEAPON_SPRITES[index]
-        width = round(height * region[2] / region[3])
-        if pose is None:
-            pose = (player_attack.sword_pose(attack_kind, progress) if index == 2
-                    else player_attack.weapon_pose(attack_kind, progress))
-        hand_x, hand_y, angle, lunge = pose
-        grip_y = round(height * grip)
-        center = canvas.SDL_Point(width // 2, grip_y)
-        left = actor.x + actor.facing * (hand_x + lunge) - center.x
-        bottom = floor_y + hand_y + grip_y - height
-        target = canvas.to_sdl_rect(left, bottom, width, height)
-        texture = (self.hero_sword_art if index == 2 else self.weapon_art).texture
-        canvas.SDL_SetTextureAlphaMod(texture, opacity)
-        canvas.SDL_RenderCopyEx(
-            canvas.renderer, texture, canvas.SDL_Rect(*region), target,
-            angle * actor.facing, center, canvas.SDL_FLIP_NONE,
-        )
-        canvas.SDL_SetTextureAlphaMod(texture, 255)
-
-    def _draw_unified_sword_player(self, actor, floor_y, opacity=255):
-        image = self.player_sword_unified
-        width, height = image.w // 4, image.h // 4
-        if actor.jump_time > 0:
-            phase = min(7, int(actor.jump_time * 8 / actor.jump_duration))
-            index = JUMP_POSE_ORDER[phase]
-            row = 2 + index // 4
-            column = index % 4
-            # 각 그림의 발 위치를 기준으로 빈 여백을 보정한다.
-            foot_y = (289, 288, 260, 218, 266, 293, 303, 306)[index]
-        elif actor.moving:
-            index = int(actor.walk_distance / 19) % 8
-            row, column = index // 4, index % 4
-            foot_y = (305, 305, 305, 300, 307, 306, 307, 306)[index]
-        else:
-            row, column, foot_y = 3, 3, 306
-        scale = 90 / height
-        bottom = floor_y - (height - foot_y) * scale
-        canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
-        draw_region(image, (column * width, row * height, width, height),
-                    actor.x - width * scale / 2, bottom, width * scale, height * scale,
-                    actor.facing < 0)
-        canvas.SDL_SetTextureAlphaMod(image.texture, 255)
-
     def _avatar(self, idle, walk, actor, opacity=255, jump_art=None):
         if actor.jump_time > 0:
             if jump_art is None:
-                jump_art = self.echo_jump_art if idle is self.echo else self.player_jump
+                jump_art = self.echo_jump_art
             progress = min(7.999, actor.jump_time * 8 / JUMP_DURATION)
             phase = int(progress)
             # Blend briefly into the next pose instead of abruptly replacing it.
@@ -1462,17 +1389,15 @@ class View:
         left = actor.x - width / 2 + face_alignment
         bottom = self._actor_floor_y(actor) + actor.jump_height + JUMP_HEAD_LIFT[index]
         flip = actor.facing < 0
-        if image is not self.player_jump:
-            # 분신 시트의 망토 끝·빛 번짐과 칼 시트의 칼끝은 몸 둘레 영역 밖으로 나간다.
-            # 같은 비율로 프레임 칸 전체를 그려 잘리지 않게 한다.
-            cell_w, cell_h = image.w // 4, image.h // 2
-            cell_x, cell_y = index % 4 * cell_w, index // 4 * cell_h
-            pad_left, pad_right = region[0] - cell_x, cell_x + cell_w - region[0] - region[2]
-            pad_bottom = cell_y + cell_h - region[1] - region[3]
-            left -= (pad_right if flip else pad_left) * scale
-            bottom -= pad_bottom * scale
-            region = (cell_x, cell_y, cell_w, cell_h)
-            width, height = cell_w * scale, cell_h * scale
+        # 분신 시트의 망토 끝·빛 번짐은 몸 둘레 영역 밖으로 나간다. 같은 비율로 프레임 칸 전체를 그려 잘리지 않게 한다.
+        cell_w, cell_h = image.w // 4, image.h // 2
+        cell_x, cell_y = index % 4 * cell_w, index // 4 * cell_h
+        pad_left, pad_right = region[0] - cell_x, cell_x + cell_w - region[0] - region[2]
+        pad_bottom = cell_y + cell_h - region[1] - region[3]
+        left -= (pad_right if flip else pad_left) * scale
+        bottom -= pad_bottom * scale
+        region = (cell_x, cell_y, cell_w, cell_h)
+        width, height = cell_w * scale, cell_h * scale
         canvas.SDL_SetTextureAlphaMod(image.texture, opacity)
         draw_region(image, region, left, bottom, width, height, flip)
         canvas.SDL_SetTextureAlphaMod(image.texture, 255)

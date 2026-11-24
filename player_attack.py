@@ -33,31 +33,6 @@ EFFECTS = {
 }
 HIT_SPARK = ('hit-spark', 26, 1.0)  # 시트, 맞은 적의 바닥 위 높이, 배율
 
-# The existing body atlas has four hand-drawn poses. These are the forward
-# fist positions at its on-screen size, so the selected sword stays in hand.
-ATTACK_HANDS = ((16, 60), (25, 64), (32, 64), (18, 60))
-
-
-def body_frames(progress):
-    """Current and next body pose, with a short blend at each transition."""
-    progress = max(0.0, min(1.0, progress))
-    boundaries = (0.16, 0.40, 0.68)
-    index = sum(progress >= boundary for boundary in boundaries)
-    if index == 3:
-        return index, index, 0.0
-    blend = max(0.0, min(1.0, (progress - (boundaries[index] - 0.055)) / 0.055))
-    return index, index + 1, blend
-
-
-def sword_pose(kind, progress):
-    """Sword grip follows the fist while the sword angle follows the attack."""
-    current, following, blend = body_frames(progress)
-    x0, y0 = ATTACK_HANDS[current]
-    x1, y1 = ATTACK_HANDS[following]
-    _, _, angle, lunge = weapon_pose(kind, progress)
-    return x0 + (x1 - x0) * blend, y0 + (y1 - y0) * blend, angle, lunge
-
-
 def weapon_pose(kind: str, progress: float):
     """지금 진행도의 (손 앞쪽 거리, 손 높이, 무기 각도, 몸 내디딤)."""
     keys = SLASH if kind == 'slash' else THRUST

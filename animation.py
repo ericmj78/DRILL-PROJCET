@@ -33,30 +33,3 @@ class WalkCycle:
         canvas.SDL_SetTextureAlphaMod(self.image.texture, 255)
 
 
-class AttackCycle:
-    def __init__(self, image, frames, draw_height=103):
-        self.image = image
-        self.frames = frames
-        self.draw_height = draw_height
-
-    def draw(self, actor, floor_y, progress, opacity=255, blend_frames=None, height=None):
-        if blend_frames is None:
-            index = min(int(progress * len(self.frames)), len(self.frames) - 1)
-            poses = ((index, opacity),)
-        else:
-            current, following, blend = blend_frames
-            poses = ((current, opacity), (following, round(opacity * blend)))
-        for index, alpha in poses:
-            if alpha <= 0:
-                continue
-            pose = self.frames[index]
-            _, _, source_width, source_height = pose
-            draw_height = self.draw_height if height is None else height
-            width = draw_height * source_width / source_height
-            align = (0, -2, -4, 2)[index] if len(self.frames) == 4 else 0
-            canvas.SDL_SetTextureAlphaMod(self.image.texture, alpha)
-            draw_region(
-                self.image, pose, actor.x - width / 2 + actor.facing * align,
-                floor_y, width, draw_height, actor.facing < 0,
-            )
-        canvas.SDL_SetTextureAlphaMod(self.image.texture, 255)
