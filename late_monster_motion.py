@@ -1,5 +1,5 @@
 """후반 몬스터의 대기·이동과 공격 자세를 그린다."""
-from math import pi, sin
+from math import sin
 
 from pico2d import pico2d as canvas
 

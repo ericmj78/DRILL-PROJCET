@@ -3,7 +3,6 @@ from math import pi, sin
 
 
 LEFT, RIGHT = 48, 2192
-FLOOR_Y = (156, 320, 484)
 STEP = 1 / 60
 MOVE_SPEED = 230
 MAX_RECORD_SECONDS = 10
@@ -189,6 +188,7 @@ class EnemyKind:
     damage: int = 0          # 본체가 맞을 때 깎이는 체력
     xp: int = 0              # 처치했을 때 얻는 경험치
     damage_ratio: float = 0  # 일부 적은 본체 최대 체력에 비례해 피해를 준다.
+    width: int = 0           # 그림의 몸 폭. 본체 공격은 폭 × 키(size) 상자에 닿으면 맞는다. 0이면 점으로 본다
 
 
 ENEMY_KINDS = {
@@ -198,7 +198,7 @@ ENEMY_KINDS = {
     'crawler': EnemyKind('monster_spider.png', 88, 185, 38, 10, 100, damage=7, xp=10),
     # 층 유령: 정해진 높이에서 좌우로 떠다니며 닿으면 최대 체력의 35% (세 번 닿으면 쓰러진다).
     'tier_ghost': EnemyKind('monster_03_watcher.png', 60, 0, 30, 8, 70, xp=6, damage_ratio=0.35),
-    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 275, damage=8, xp=80),
+    'jailer_boss': EnemyKind('monster_concepts/prison-jailer-boss.png', 65, 235, 70, 95, 275, damage=8, xp=80, width=240),
     'magic_book': EnemyKind('monster_concepts/magic-book.png', 75, 175, 38, 15, 76, damage=8, xp=10),
     'potion_slime': EnemyKind('monster_concepts/potion-slime.png', 55, 160, 36, 22, 85, damage=9, xp=14),
     'magic_armor': EnemyKind('monster_concepts/magic-armor.png', 65, 180, 48, 32, 115, damage=11, xp=20),
@@ -207,8 +207,8 @@ ENEMY_KINDS = {
     'time_thief': EnemyKind('monster_concepts/time-thief.png', 65, 175, 42, 20, 108, damage=7, xp=16),
     'cursed_lantern': EnemyKind('monster_concepts/cursed-lantern.png', 70, 185, 42, 16, 112, damage=7, xp=14),
     'broken_jester': EnemyKind('monster_concepts/broken-jester.png', 75, 185, 40, 18, 104, damage=7, xp=15),
-    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 268, damage=11, xp=120),
-    'echo_knight': EnemyKind('monster_concepts/echo-knight-boss.png', 70, 260, 65, 180, 240, damage=12, xp=160),
+    'grand_witch': EnemyKind('monster_concepts/grand-witch-boss.png', 65, 220, 55, 145, 268, damage=11, xp=120, width=204),
+    'echo_knight': EnemyKind('monster_concepts/echo-knight-boss.png', 70, 260, 65, 180, 240, damage=12, xp=160, width=218),
 }
 
 BOSS_KINDS = frozenset(('jailer_boss', 'grand_witch', 'echo_knight'))

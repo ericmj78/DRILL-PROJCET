@@ -80,7 +80,6 @@ SKILLS = {
 }
 CHARGE_SPEED = 520
 CHAIN_REACH = 190  # 쇠사슬이 닿는 앞쪽 거리
-CHAIN_CRACK = 0.27 # chain-whip 시트에서 사슬 끝이 터지는 시각
 ROCK_FALL = 0.9    # 바위가 떨어지는 데 걸리는 시간
 
 

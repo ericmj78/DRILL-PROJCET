@@ -15,7 +15,6 @@ from asset_paths import asset_path
 import boss_skills
 import late_monster_motion
 from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
-from monster_walk import MONSTER_GAITS, MonsterWalk
 import player_attack
 from poison_fx import PoisonFx
 import pixel_sprites
@@ -187,10 +186,6 @@ class View:
         )
         for background in self.beast_jump_backgrounds:
             sdl2.SDL_SetTextureScaleMode(background.texture, sdl2.SDL_ScaleModeLinear)
-        self.floor_arenas = {
-            index: load_asset(f'층별맵/구간{index + 1:02d}_보스방.png')
-            for index in (2, 5, 8)
-        }
         self.boss_tall_arenas = {
             2: load_asset('map_sections/jailer_double_height_concept.png'),
             5: load_asset('map_sections/witch_double_height_concept.png'),
@@ -249,25 +244,12 @@ class View:
                       for row in range(2) for column in range(4)]
             self.monster_echo_walk[name] = WalkCycle(sheet, frames, ENEMY_KINDS[name].size, 9)
         self.attack_fx = load_attack_fx(ASSETS / 'attack_fx')
-        self.enemy_walk = {
-            name: MonsterWalk(load_asset(gait.sheet), gait)
-            for name, gait in MONSTER_GAITS.items()
-            if asset_path(gait.sheet).exists()   # 새 시트로 바꾸려고 지운 부위 그림은 건너뛰고 서 있는 그림으로 그린다
-        }
-        spider = load_asset('monster_spider_walk_sheet.png')
-        cell_w, cell_h = spider.w // 4, spider.h // 2
-        spider_frames = [(column * cell_w, row * cell_h + round(cell_h * 0.20),
-                          cell_w, round(cell_h * 0.65))
-                         for row in range(2) for column in range(4)]
-        self.enemy_walk['crawler'] = WalkCycle(spider, spider_frames, 70, 9)
-        for name, asset in (
-            ('magic_armor', 'magic-armor'), ('magic_armor_guard', 'magic-armor'), ('witch', 'witch'),
-        ):
-            sheet = load_asset(f'monster_concepts/{asset}-walk.png')
-            width, height = sheet.w // 4, sheet.h // 2
-            frames = [(column * width, row * height, width, height)
-                      for row in range(2) for column in range(4)]
-            self.enemy_walk[name] = WalkCycle(sheet, frames, ENEMY_KINDS[name].size, 9)
+        # 옛 걷기 그림은 마법 갑옷·갑옷 경비병만 쓴다 (나머지 몬스터는 PixelLab 시트나 후반 몬스터 모션)
+        armor = load_asset('monster_concepts/magic-armor-walk.png')
+        width, height = armor.w // 4, armor.h // 2
+        frames = [(column * width, row * height, width, height) for row in range(2) for column in range(4)]
+        self.enemy_walk = {name: WalkCycle(armor, frames, ENEMY_KINDS[name].size, 9)
+                           for name in ('magic_armor', 'magic_armor_guard')}
         self.enemies['magic_book'] = load_asset('monster_concepts/magic-book-sprite.png')
         self.enemies['potion_slime'] = load_asset('monster_concepts/potion-slime-sprite.png')
 
@@ -1083,22 +1065,15 @@ class View:
                 # 공격 중에는 monster_attack.py의 자세 스크립트대로 그린다.
                 actor = screen_enemy.actor
                 walk = self.enemy_walk.get(enemy.spawn.kind)
-                if isinstance(walk, MonsterWalk):
-                    actor.x += actor.facing * pose.dx
-                    walk.draw(actor, y + pose.dy, faces=-1, tint=tint, lean=pose.angle)
-                elif walk is not None:
+                if walk is not None:
                     frame = walk.frames[int(actor.walk_distance / walk.stride_per_frame) % len(walk.frames)]
                     draw_posed(walk.image, frame, x, y, walk.draw_height, actor.facing, pose, tint)
                 else:
                     image = self.enemies[enemy.spawn.kind]
                     draw_posed(image, (0, 0, image.w, image.h), x, y, kind.size, actor.facing, pose, tint)
                 draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, actor.facing, enemy.windup, enemy.recovery)
-            elif enemy.spawn.kind in ('magic_armor', 'magic_armor_guard', 'witch'):
+            elif enemy.spawn.kind in self.enemy_walk:
                 self.enemy_walk[enemy.spawn.kind].draw(screen_enemy.actor, y, faces=-1, tint=tint)
-            elif enemy.actor.moving and enemy.spawn.kind in self.enemy_walk:
-                self.enemy_walk[enemy.spawn.kind].draw(
-                    screen_enemy.actor, y, faces=-1, tint=tint,
-                )
             else:
                 self._sprite(self.enemies[enemy.spawn.kind], screen_enemy.actor, kind.size, world.time, feet=feet, faces=-1, tint=tint)
             # 머리 위에 이름과 체력바. 벨 수 없는 적은 이름만 흐리게 보인다.

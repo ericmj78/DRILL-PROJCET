@@ -8,7 +8,7 @@ from pico2d import (
 )
 from pico2d import pico2d as canvas
 
-from stages import BOSS_KINDS, STAGES, STAGE_GROUPS, STEP, next_section_in_stage, stage_group_index
+from stages import STAGE_GROUPS, STEP, next_section_in_stage, stage_group_index
 from title_menu import BossSelector, TitleMenu
 from view import HEIGHT, WIDTH, View
 from world import Motion, World

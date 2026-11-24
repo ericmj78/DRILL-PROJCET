@@ -19,9 +19,11 @@ SUBJECT = {'subject_description': 'a tall grand witch with a huge purple pointed
                                   'ornate purple and gold robes and a crystal staff',
            'initial_pose': 'standing upright holding the crystal staff in her front hand', 'direction': 'west'}
 ROWS = (                   # 줄 순서는 monster_sprite.py(GRAND_WITCH의 skills)와 같다 / (이름, 칸 수, 시드, 동작)
-    # 걷기 시드 1은 지팡이 머리가 떨어져 위에 떠다녔다
-    ('walk', 8, 2, 'walks forward in place step by step in a looping walk cycle, the hem of the long robe swings with '
-                   'each step and the body bobs slightly, she keeps holding the staff upright in her front hand the whole time'),
+    # 걷기: 시드 1은 지팡이 머리가 떨어져 떠다녔고, 로브만 흔드는 지시(시드 2)는 제자리에 선 것처럼 보였다.
+    # 걸음마다 몸이 오르내리고 발끝이 보이게 지시해 시드 3·4·5 중 가장 걷는 느낌이 나는 3을 골랐다.
+    ('walk', 8, 3, 'walks forward to the left with clear heavy steps in a looping walk cycle: her body rises and dips with '
+                   'every step, the tips of her feet peek out from under the robe hem one after the other, she plants the '
+                   'crystal staff on the ground like a walking stick with each stride, the long robe and cape swing with the motion'),
     ('attack', 8, 1, 'swings the crystal staff forward in a sharp magic strike in front of her, then returns to her stance'),
     ('idle', 4, 1, 'breathes slowly in place, the hair and robes drift gently, the crystal on the staff glimmers'),
     ('gravity', 8, 1, 'spreads her free hand forward and pulls it back toward herself as if drawing everything in, '

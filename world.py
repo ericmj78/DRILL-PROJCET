@@ -30,7 +30,6 @@ ECHO_INVULNERABILITY = 0.92
 # 거미줄 그네 (거미 분신 전용). F로 붙이고 ←→로 반동, ↑↓로 줄을 감고 풀고,
 # Space로 흔들리던 속도 그대로 날아가며 놓거나 D로 그 자리에서 놓는다. 매달린 채 F를 다시 쏘면 새 지점에 옮겨 붙는다.
 SPIDER_WEB_TOP = 150       # 거미줄을 붙이는 천장 높이 (바닥 위)
-SPIDER_WEB_REACH = 90      # 바라보는 쪽으로 이만큼 앞에 붙인다
 SPIDER_GRAVITY = 1400      # px/s²
 SPIDER_PUMP = 3.2          # ←→로 주는 반동 (rad/s²)
 SPIDER_DAMPING = 0.15      # 초당 흔들림이 줄어드는 비율
@@ -1348,6 +1347,25 @@ class World:
         left, right = sorted((first.x, second.x))
         return not any(left < wall < right for wall in self._barriers(first.floor))
 
+    def _in_reach(self, enemy: Enemy, reach: float) -> bool:
+        """본체의 공격이 적에게 닿는가. 몸 폭(width)이 있는 적(보스)은 그림 크기 상자(폭 × 키)로 본다:
+        공격 범위(앞으로 reach, 뒤로 12)가 몸 폭 구간과 겹치고, 본체 높이가 발밑~머리 사이면 맞는다."""
+        me, it = self.player, enemy.actor
+        kind = ENEMY_KINDS[enemy.spawn.kind]
+        if not kind.width:
+            return (it.x - me.x) * me.facing >= -12 and self._clear_line(me, it, reach)
+        if me.elevator_target is not None or it.elevator_target is not None or me.floor != it.floor:
+            return False
+        half = kind.width / 2
+        low, high = sorted((me.x - me.facing * 12, me.x + me.facing * reach))
+        if high < it.x - half or it.x + half < low:
+            return False
+        if not it.jump_height - 30 <= me.jump_height <= it.jump_height + kind.size:
+            return False
+        nearest = min(max(me.x, it.x - half), it.x + half)   # 몸에서 본체와 가장 가까운 곳
+        left, right = sorted((me.x, nearest))
+        return not any(left < wall < right for wall in self._barriers(me.floor))
+
     def _attack(self, kind='slash'):
         weapon = WEAPONS[self.weapon_index]
         self.attack_kind = kind
@@ -1362,8 +1380,7 @@ class World:
         reach = round(weapon.reach * (0.8 if self.attack_kind == 'slash' else 1.3))
         damage = max(1, attack_power(self.level) + weapon.bonus + (1 if self.attack_kind == 'slash' else 0))
         for enemy in self.enemies:
-            offset = enemy.actor.x - self.player.x
-            if offset * self.player.facing < -12 or not self._clear_line(self.player, enemy.actor, reach):
+            if not self._in_reach(enemy, reach):
                 continue
             self.hit_sparks.append([enemy.actor.x, enemy.actor.floor, 0.0])
             if enemy.health is None:

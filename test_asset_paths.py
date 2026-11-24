@@ -1,6 +1,5 @@
 import json
 import unittest
-from pathlib import Path
 
 from asset_paths import ASSET_ROOT, NAME_MAP, asset_path
 
