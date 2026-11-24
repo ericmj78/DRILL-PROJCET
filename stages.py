@@ -332,6 +332,9 @@ STAGES = (
         '쇠사슬 간수를 처치하세요. 쇠사슬은 뒤로 물러나고, 낙석은 그림자를 피하고, 돌진은 점프로 넘으세요.',
         # 층 없는 한 화면 보스방. (예전 5층 탑의 1~4층 퍼즐은 뺐다)
         1, Point(112, 0), Point(2100, 0),
+        floor_height=800,
+        platforms=(Platform(0, 350, 510, 38, False), Platform(0, 525, 685, 76, False),
+                   Platform(0, 1510, 1670, 38, False), Platform(0, 1335, 1495, 76, False)),
         enemies=(EnemySpawn('jailer_boss', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
@@ -378,6 +381,9 @@ STAGES = (
         '대마녀를 처치하세요. 중력장은 반대 방향키로 버티고, 낙뢰는 바닥 문양을 피하고, 마력 구체는 점프로 넘으세요.',
         # 층 없는 한 화면 보스방. (예전 5층 탑의 1~4층과 균형 승강기는 뺐다)
         1, Point(111, 0), Point(2100, 0),
+        floor_height=800,
+        platforms=(Platform(0, 350, 510, 38, False), Platform(0, 525, 685, 76, False),
+                   Platform(0, 1510, 1670, 38, False), Platform(0, 1335, 1495, 76, False)),
         enemies=(EnemySpawn('grand_witch', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),

@@ -141,12 +141,12 @@ def update(world, enemy) -> bool:
         if active:
             world._move_x(actor, actor.facing * CHARGE_SPEED * STEP)
             player = world.player
-            if player.floor == actor.floor and player.jump_time == 0 and abs(player.x - actor.x) < 36:
+            if player.floor == actor.floor and player.jump_height < 30 and abs(player.x - actor.x) < 36:
                 message = '잔향 기사의 돌진에 맞았습니다.' if enemy.spawn.kind == 'echo_knight' else '간수의 돌진에 맞았습니다.'
                 if world.hurt(skill.damage, message):
                     effects.append(Effect('crit-hit', player.x, player.floor, actor.facing, scale=0.8))
             for echo in world.echo_actors():
-                if echo.floor == actor.floor and echo.jump_time == 0 and abs(echo.x - actor.x) < 36:
+                if echo.floor == actor.floor and echo.jump_height < 30 and abs(echo.x - actor.x) < 36:
                     world.hurt_echo(echo, skill.damage)
     elif skill.name == 'chain' and fired:
         player = world.player
@@ -234,11 +234,11 @@ def update_effects(world):
         if effect.hit_at is None or not effect.hit_at <= effect.age <= effect.hit_at + effect.hit_for:
             continue
         reach = effect.radius + effect.grow * (effect.age - effect.hit_at)
-        dodged = effect.jumpable and player.jump_time > 0
+        dodged = effect.jumpable and player.jump_height > 30
         if player.floor == effect.floor and abs(player.x - effect.x) <= reach and not dodged:
             world.hurt(effect.damage, '보스의 스킬에 맞았습니다. 예고를 보고 피하세요.')
         for echo in world.echo_actors():
             if (echo.floor == effect.floor and abs(echo.x - effect.x) <= reach
-                    and not (effect.jumpable and echo.jump_time > 0)):
+                    and not (effect.jumpable and echo.jump_height > 30)):
                 world.hurt_echo(echo, effect.damage)
     world.boss_effects = [effect for effect in world.boss_effects if effect.age < effect.life]

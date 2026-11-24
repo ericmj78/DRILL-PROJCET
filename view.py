@@ -31,6 +31,10 @@ from world import JUMP_DURATION, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, 
 
 
 WIDTH, HEIGHT = 1120, 720
+# 보스방(간수·대마녀)은 1/BOSS_ZOOM배 큰 그림판에 그린 뒤 BOSS_ZOOM배로 줄여 붙여, 방을 넓게 본다.
+BOSS_ROOMS, BOSS_ZOOM = (2, 5), 0.75
+ZOOM_WIDTH, ZOOM_HEIGHT = round(WIDTH / BOSS_ZOOM), round(HEIGHT / BOSS_ZOOM)
+PLAY_TOP, PLAY_HEIGHT = 95, 521   # 화면에서 맵이 보이는 칸 (위에서부터, 아래로 HUD 줄까지)
 # 물약 슬라임이 이만큼 움직일 때마다 자국을 남기고, 자국은 이만큼 뒤 사라진다 (마지막 40% 동안 흐려진다).
 # 슬라임이 느리고 몸에 가려지니 수명을 넉넉히 둔다.
 PUDDLE_GAP, PUDDLE_SECONDS = 34, 8.0
@@ -136,6 +140,8 @@ class View:
         self.camera_x = 0.0
         self.camera_y = 0.0
         self.floor_view_texture = None
+        self.zoom_texture = None   # 보스방을 그리는 큰 그림판 (ZOOM_WIDTH × ZOOM_HEIGHT)
+        self.zoom_viewport = None
         self.last_floor = None
         self.floor_transition_at = 0.0
         self.camera_lift = 0.0   # 통합방에서 화면을 위로 올린 거리 (층별 화면 자르기에도 쓴다)
@@ -184,6 +190,10 @@ class View:
         self.floor_arenas = {
             index: load_asset(f'층별맵/구간{index + 1:02d}_보스방.png')
             for index in (2, 5, 8)
+        }
+        self.boss_tall_arenas = {
+            2: load_asset('map_sections/jailer_double_height_concept.png'),
+            5: load_asset('map_sections/witch_double_height_concept.png'),
         }
         self.wizard_fx = {}
         for name in ('rain', 'storm', 'potion'):
@@ -269,6 +279,31 @@ class View:
         self.enemies['magic_book'] = load_asset('monster_concepts/magic-book-sprite.png')
         self.enemies['potion_slime'] = load_asset('monster_concepts/potion-slime-sprite.png')
 
+    def _begin_zoom(self):
+        """보스방을 큰 그림판에 그리기 시작한다. pico2d는 canvas_height로 위아래를 뒤집으므로 그동안 바꿔 둔다."""
+        renderer = canvas.renderer
+        if self.zoom_texture is None:
+            self.zoom_texture = sdl2.SDL_CreateTexture(renderer, sdl2.SDL_PIXELFORMAT_RGBA8888,
+                                                       sdl2.SDL_TEXTUREACCESS_TARGET, ZOOM_WIDTH, ZOOM_HEIGHT)
+            if not self.zoom_texture:
+                raise RuntimeError('보스방 화면을 만들 수 없습니다.')
+            sdl2.SDL_SetTextureScaleMode(self.zoom_texture, sdl2.SDL_ScaleModeLinear)   # 줄일 때 도트가 지글거리지 않게
+        self.zoom_viewport = canvas.SDL_Rect()
+        canvas.SDL_RenderGetViewport(renderer, byref(self.zoom_viewport))
+        sdl2.SDL_SetRenderTarget(renderer, self.zoom_texture)
+        sdl2.SDL_SetRenderDrawColor(renderer, 7, 14, 27, 255)
+        sdl2.SDL_RenderClear(renderer)
+        canvas.canvas_width, canvas.canvas_height = ZOOM_WIDTH, ZOOM_HEIGHT
+
+    def _end_zoom(self):
+        """큰 그림판의 맵 칸을 화면의 맵 칸에 BOSS_ZOOM배로 줄여 붙인다."""
+        renderer = canvas.renderer
+        canvas.canvas_width, canvas.canvas_height = WIDTH, HEIGHT
+        sdl2.SDL_SetRenderTarget(renderer, None)
+        canvas.SDL_RenderSetViewport(renderer, self.zoom_viewport)   # 흔들림·전체 화면 여백을 되돌린다
+        source = sdl2.SDL_Rect(0, round(PLAY_TOP / BOSS_ZOOM), ZOOM_WIDTH, round(PLAY_HEIGHT / BOSS_ZOOM))
+        sdl2.SDL_RenderCopy(renderer, self.zoom_texture, source, sdl2.SDL_Rect(0, PLAY_TOP, WIDTH, PLAY_HEIGHT))
+
     def _shake(self, world, screen):
         """world.shake가 남아 있는 동안 화면 전체를 흔든다."""
         renderer = canvas.renderer
@@ -321,6 +356,9 @@ class View:
             self.last_floor = None
         focus = world.recording.preview if world.recording else world.player
         single_floor = not self.free_camera and world.stage.floors > 1
+        zoomed = world.index in BOSS_ROOMS   # 보스방은 BOSS_ZOOM배로 줄여 넓게 보인다
+        if zoomed:
+            self._begin_zoom()
         if single_floor:
             if self.last_floor is not None and self.last_floor != focus.floor:
                 self.floor_transition_at = perf_counter()
@@ -334,7 +372,8 @@ class View:
             sdl2.SDL_SetRenderTarget(canvas.renderer, self.floor_view_texture)
             sdl2.SDL_SetRenderDrawColor(canvas.renderer, 7, 14, 27, 255)
             sdl2.SDL_RenderClear(canvas.renderer)
-        self.camera_x = self.free_camera_x if self.free_camera else min(WIDTH, max(0, focus.x - WIDTH * 0.60))
+        view_width = ZOOM_WIDTH if zoomed else WIDTH
+        self.camera_x = self.free_camera_x if self.free_camera else min(WIDTH * 2 - view_width, max(0, focus.x - view_width * 0.60))
         if world.stage.floor_height == 400:
             self.camera_lift = 0.0
         if world.index in (0, 1, 3, 4, 9):
@@ -458,12 +497,13 @@ class View:
                 arena = self.late_arcane_arena
                 draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
                             self.floor_y[3] - 95, WIDTH * 2, 560)
-        elif world.index in (2, 5):   # 간수의 방·대마녀의 방: 층 없는 한 화면 보스방
-            self.camera_y = 0.0
-            self.floor_y = (160.0,)
-            arena = self.floor_arenas[world.index]
+        elif world.index in (2, 5):
+            if not self.free_camera:
+                self.camera_y = max(0.0, min(220.0, focus.jump_height - 100))
+            self.floor_y = (160.0 / BOSS_ZOOM - self.camera_y,)   # 줄인 뒤에도 바닥이 화면 같은 자리에 오게
+            arena = self.boss_tall_arenas[world.index]
             draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
-                        self.floor_y[0] - 95, WIDTH * 2, 560)
+                        self.floor_y[0] - 60, WIDTH * 2, 800)
             if world.index == 5:
                 self._draw_witch_arena_rain(world.time)
         self.animation_time = world.time
@@ -473,6 +513,8 @@ class View:
             box(x, y, x + 2, y + 2, (118, 174, 187))
         self._draw_map(world)
         self._draw_characters(world)
+        if zoomed:
+            self._end_zoom()
         if single_floor:
             sdl2.SDL_SetRenderTarget(canvas.renderer, None)
             floor_y = self.floor_y[focus.floor] + self.camera_lift
@@ -485,6 +527,8 @@ class View:
                 fade = max(0.0, 1.0 - (perf_counter() - self.floor_transition_at) / 0.3)
             if fade > 0:
                 box(0, 104, WIDTH, 625, (7, 14, 27, round(220 * fade)))
+        # 화면에 고정된 UI라 맵 그림(보스방 줌 아웃, 층별 화면)을 다 붙인 뒤 위쪽 같은 자리에 그린다
+        self._draw_boss_bar(world)
         self._draw_hud(world)
         if self.free_camera:
             box(345, 587, 775, 620, INK)
@@ -1087,7 +1131,6 @@ class View:
             screen_x = x - self.camera_x - text_width(font, text) / 2
             font.draw(screen_x + 1, y - 1, text, INK)
             font.draw(screen_x, y, text, RED if on_player else WHITE)
-        self._draw_boss_bar(world)
 
         for effect in world.boss_effects:
             if effect.age < 0:
