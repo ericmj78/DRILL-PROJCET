@@ -346,29 +346,7 @@ def stage_2(b):
 
 @solution(3)
 def stage_3(b):
-    b.kill('crawler')
-    b.go(151)
-    b.rec()
-    b.go(324)
-    b.wait(2.1)
-    b.rec()
-    b.up()
-    b.go(600)                                      # 본체가 C 발판을 밟은 채로 녹화한다
-    b.rec()
-    b.go(1000)
-    b.wait(1.9)
-    b.rec()
-    b.until(lambda w: w.echo.actor.x > 840)        # 분신이 C 문을 지나면 출발
-    b.go(700)
-    b.up()
-    b.go(960)
-    b.kill('watcher')
-    b.go(1800)
-    b.up()
-    b.kill('watcher')
-    b.kill('crawler')
-    b.go(400)
-    b.up()
+    # 간수의 방: 층 없는 보스방에서 쇠사슬 간수를 처치하고 출구로.
     b.kill('jailer_boss')
     b.go(2100)
 
@@ -552,36 +530,7 @@ def stage_5(b):
 
 @solution(6)
 def stage_6(b):
-    b.kill('magic_book')
-    b.go(160)
-    b.rec()
-    b.go(145)
-    b.up()
-    b.go(440)
-    b.wait(1.6)
-    b.rec()
-    b.go(860)
-    b.kill('magic_armor')
-    b.go(1250)
-    b.rec()
-    b.go(1150)      # C 발판: 본체가 C 문에 들어설 때까지
-    b.wait(0.3)
-    b.go(1300)      # 균형 발판: 승강 발판이 다 오를 때까지
-    b.wait(1.6)
-    b.rec()
-    b.go(1450)
-    b.until(lambda w: w.player.floor == 1, limit=5)
-    b.kill('potion_slime')
-    b.go(400, slash=True)
-    b.up()
-    b.kill('magic_book')
-    b.kill('potion_slime')
-    b.go(1800)
-    b.up()
-    b.kill('witch')
-    b.kill('magic_armor')
-    b.go(400)
-    b.up()
+    # 대마녀의 방: 층 없는 보스방에서 대마녀를 처치하고 출구로.
     b.kill('grand_witch')
     b.go(2100)
 

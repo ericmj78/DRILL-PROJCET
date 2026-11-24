@@ -162,12 +162,6 @@ class EchoBridge:
 
 
 @dataclass(frozen=True)
-class BalanceLift:
-    platform: Point
-    weight: Point
-
-
-@dataclass(frozen=True)
 class Weapon:
     name: str
     reach: int
@@ -246,7 +240,6 @@ class Stage:
     watch_gate: WatchGate | None = None
     isolation: IsolationRoom | None = None
     bridge: EchoBridge | None = None
-    lift: BalanceLift | None = None
     echo_seconds: float = MAX_RECORD_SECONDS  # 이 스테이지에서 분신 한 번에 녹화할 수 있는 시간
     elevators: tuple[Stair, ...] = ()
     enemy_scale: float = 1.0  # 몬스터 체력·피해 배율
@@ -335,26 +328,11 @@ STAGES = (
         echo_seconds=20,   # 발판 일곱 번을 슈퍼 점프(1초 모으기)로 오르려면 10초로는 모자라다
     ),
     Stage(
-        '03  간수의 다섯 층',
-        '승강기 앞에서 ↑↓로 이동하세요. 분신과 문을 지나 5층의 간수를 처치하세요.',
-        5, Point(112, 0), Point(2100, 4),
-        elevators=(Stair(151, 0), Stair(700, 1), Stair(1300, 1), Stair(1800, 2), Stair(400, 3)),
-        gates=(
-            Gate('A', Point(324, 0), Point(500, 1), lever=Point(550, 1)),
-            Gate('C', Point(600, 1), Point(800, 1), lever=Point(950, 1)),
-            Gate('B', Point(1000, 1), Point(870, 2)),
-        ),
-        enemies=(
-            EnemySpawn('crawler', Point(400, 0), (350, 450)),
-            EnemySpawn('beast', Point(1700, 1), (1400, 1800)),
-            EnemySpawn('watcher', Point(1080, 2), (1000, 1160)),
-            EnemySpawn('warden', Point(1500, 2), (1500, 1500)),
-            EnemySpawn('crawler', Point(1000, 3), (900, 1100)),
-            EnemySpawn('watcher', Point(1500, 3), (1400, 1600)),
-            EnemySpawn('jailer_boss', Point(1120, 4), (1050, 1190)),
-        ),
-        walls=(Point(1100, 1),),
-        guard=Point(1500, 2),
+        '03  간수의 방',
+        '쇠사슬 간수를 처치하세요. 쇠사슬은 뒤로 물러나고, 낙석은 그림자를 피하고, 돌진은 점프로 넘으세요.',
+        # 층 없는 한 화면 보스방. (예전 5층 탑의 1~4층 퍼즐은 뺐다)
+        1, Point(112, 0), Point(2100, 0),
+        enemies=(EnemySpawn('jailer_boss', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
@@ -396,26 +374,11 @@ STAGES = (
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
-        '07  대마녀의 다섯 층',
-        '분신으로 균형 발판을 작동하고, 승강기를 타고 5층 대마녀에게 가세요.',
-        5, Point(111, 0), Point(2100, 4),
-        stairs=(Stair(145, 0),),
-        elevators=(Stair(400, 1), Stair(1800, 2), Stair(400, 3)),
-        gates=(
-            Gate('A', Point(440, 1), Point(800, 0)),
-            Gate('C', Point(1150, 0), Point(1380, 0)),
-        ),
-        enemies=(
-            EnemySpawn('potion_slime', Point(1650, 1), (1550, 1750)),
-            EnemySpawn('magic_book', Point(400, 0), (340, 460)),
-            EnemySpawn('magic_armor', Point(1030, 0), (970, 1090)),
-            EnemySpawn('magic_book', Point(950, 2), (880, 1020)),
-            EnemySpawn('potion_slime', Point(1450, 2), (1380, 1520)),
-            EnemySpawn('magic_armor', Point(1250, 3), (1180, 1320)),
-            EnemySpawn('witch', Point(1650, 3), (1580, 1720)),
-            EnemySpawn('grand_witch', Point(1120, 4), (1050, 1190)),
-        ),
-        lift=BalanceLift(Point(1450, 0), Point(1300, 0)),
+        '07  대마녀의 방',
+        '대마녀를 처치하세요. 중력장은 반대 방향키로 버티고, 낙뢰는 바닥 문양을 피하고, 마력 구체는 점프로 넘으세요.',
+        # 층 없는 한 화면 보스방. (예전 5층 탑의 1~4층과 균형 승강기는 뺐다)
+        1, Point(111, 0), Point(2100, 0),
+        enemies=(EnemySpawn('grand_witch', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(

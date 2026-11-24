@@ -245,7 +245,7 @@ def main():
                     pressed.add(key)
                     if (world.recording is None and world.monster_echoes
                             and world.player.elevator_target is None
-                            and world.player.jump_time <= 0 and not world.lift_riding):
+                            and world.player.jump_time <= 0):
                         world.echo_selecting = True
                         pressed.clear()
                         pending_stairs = 0

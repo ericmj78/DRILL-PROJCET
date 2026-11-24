@@ -45,10 +45,6 @@ RED = (249, 107, 109)
 PURPLE = (203, 145, 238)
 ASSETS = Path(__file__).resolve().parent / 'assets'
 # Pixel rows of the floor surfaces in each full-stage image, lowest floor first.
-MAP_ART = {
-    1: ('map_sections/stage-01-detailed.png', (773,)),
-    3: ('map_sections/stage-10-detailed.png', (775, 547, 327)),
-}
 PLATE_FRAMES = ((110, 316, 850, 176), (1207, 316, 850, 176))
 GATE_FRAMES = ((322, 14, 384, 820), (1135, 14, 384, 820))
 EXIT_FRAME = (40, 34, 908, 1504)
@@ -65,13 +61,6 @@ PUZZLE_PROPS = {
     'hazard': (435, 608, 450, 222),
     'sync': (895, 470, 350, 360),
     'lift_platform': (1302, 681, 290, 100),
-    'lift_weight': (1505, 775, 245, 103),
-}
-WEAPON_SPRITES = {
-    1: ((247, 111, 143, 461), 32, 0.81),
-    2: ((335, 48, 355, 1450), 65, 0.84),
-    3: ((173, 703, 299, 466), 43, 0.72),
-    4: ((884, 625, 126, 601), 62, 0.76),
 }
 JUMP_FRAMES = (
     (90, 146, 246, 280), (523, 66, 248, 358), (967, 24, 228, 362), (1410, 10, 230, 302),
@@ -167,10 +156,6 @@ class View:
         self.title_button_gold = load_asset('title_menu_button_gold.png')
         self.title_button_scales = [1.0] * 5
         self.title_button_updated_at = perf_counter()
-        self.stage_art = {}
-        for floor_count, (name, rows) in MAP_ART.items():
-            image = load_asset(name)
-            self.stage_art[floor_count] = (image, tuple(HEIGHT - round(row * HEIGHT / image.h) for row in rows))
         self.wizard_art = load_asset('wizard_castle/castle-dark.png')
         self.sky_library_art = load_asset('층별맵/3스테이지_마법도서관_통합배경.png')
         sdl2.SDL_SetTextureScaleMode(self.sky_library_art.texture, sdl2.SDL_ScaleModeLinear)
@@ -181,13 +166,11 @@ class View:
         self.late_arcane_castle = load_asset('map_sections/late_arcane_castle.png')
         self.late_arcane_arena = load_asset('map_sections/late_arcane_arena.png')
         self.witch_boss_arena = load_asset('map_sections/stage-07-witch-boss-arena.png')
-        floor_counts = (3, 3, 4, 4, 4, 4, 6, 3, 3)
         self.floor_images = {
             index: [load_asset(f'층별맵/구간{index + 1:02d}_{floor + 1}층.png')
                     for floor in range(count)]
-            for index, count in enumerate(floor_counts)
+            for index, count in ((4, 4),)   # 층별 복도 그림은 구간 4만 쓴다 (나머지는 통합 배경이나 보스방 한 장)
         }
-        self.floor_images[0][1] = load_asset('층별맵/구간01_2층_조각상.png')
         self.stage1_pixel_image = load_asset('층별맵/1스테이지_감옥_고화질.png')
         sdl2.SDL_SetTextureScaleMode(self.stage1_pixel_image.texture, sdl2.SDL_ScaleModeLinear)
         self.stage1_second_floor = load_asset('층별맵/1스테이지_2층_수로배경.png')
@@ -202,7 +185,6 @@ class View:
             index: load_asset(f'층별맵/구간{index + 1:02d}_보스방.png')
             for index in (2, 5, 8)
         }
-        self.wizard_book = load_asset('wizard_castle/book.png')
         self.wizard_fx = {}
         for name in ('rain', 'storm', 'potion'):
             data = json.loads((ASSETS / 'wizard_castle' / f'{name}.json').read_text(encoding='utf-8'))
@@ -476,76 +458,14 @@ class View:
                 arena = self.late_arcane_arena
                 draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
                             self.floor_y[3] - 95, WIDTH * 2, 560)
-        elif world.index in (2, 5):
-            now = perf_counter()
-            elapsed = min(0.1, max(0, now - self.camera_updated_at))
-            self.camera_updated_at = now
-            lift_offset = world.lift_progress if world.index == 5 and world.lift_riding and focus is world.player else 0
-            target = 400 * (focus.floor if single_floor else focus.floor + focus.elevator_offset + lift_offset)
-            if not self.free_camera:
-                self.camera_y = target if single_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
-            self.floor_y = tuple(160 + floor * 400 - self.camera_y for floor in range(5))
-            if world.index == 2:
-                for floor in range(4):
-                    corridor = self.floor_images[world.index][floor]
-                    floor_y = self.floor_y[floor]
-                    bottom = floor_y - (corridor.h - 773) * 400 / corridor.h
-                    draw_region(corridor, (0, 0, corridor.w, corridor.h),
-                                -self.camera_x, bottom, WIDTH * 2, 400)
-                arena = self.floor_arenas[world.index]
-            else:
-                for floor in range(4):
-                    corridor = self.floor_images[world.index][floor]
-                    source_height = corridor.h
-                    bottom = self.floor_y[floor] - (724 - 675) * 400 / source_height
-                    draw_region(corridor, (0, 0, corridor.w, source_height),
-                                -self.camera_x, bottom, WIDTH * 2, 400)
-                arena = self.floor_arenas[world.index]
+        elif world.index in (2, 5):   # 간수의 방·대마녀의 방: 층 없는 한 화면 보스방
+            self.camera_y = 0.0
+            self.floor_y = (160.0,)
+            arena = self.floor_arenas[world.index]
             draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
-                        self.floor_y[4] - 95, WIDTH * 2, 560)
+                        self.floor_y[0] - 95, WIDTH * 2, 560)
             if world.index == 5:
-                self._draw_wizard_tower_effects(world.time)
-        elif world.index == 1:
-            # Stack the same prison corridor for each playable floor.
-            image, _ = self.stage_art[1]
-            floor_y = []
-            for floor in range(world.stage.floors):
-                bottom = 105 + floor * 520 // world.stage.floors
-                top = 105 + (floor + 1) * 520 // world.stage.floors
-                height = top - bottom
-                draw_region(image, (0, 0, image.w, image.h),
-                            -self.camera_x, bottom, WIDTH * 2, height)
-                floor_y.append(bottom + round((image.h - 773) * height / image.h))
-            self.floor_y = tuple(floor_y)
-        elif 3 <= world.index <= 5:
-            single_floor = world.stage.floors == 1
-            source_top = 330 if single_floor else 0
-            source_height = self.wizard_art.h - source_top
-            rows = (675,) if single_floor else (675, 330)
-            self.floor_y = tuple(105 + round((self.wizard_art.h - row) * 520 / source_height)
-                                 for row in rows)
-            draw_region(self.wizard_art, (0, source_top, self.wizard_art.w, source_height),
-                        -self.camera_x, 105, WIDTH * 2, 520)
-            self._draw_wizard_effects(world.time, single_floor)
-        elif world.index == 6:
-            image = self.late_three_floor_art
-            source_height = 480
-            self.floor_y = tuple(105 + round((source_height - row) * 520 / source_height)
-                                 for row in (455, 228))
-            draw_region(image, (0, 0, image.w, source_height),
-                        -self.camera_x, 105, WIDTH * 2, 520)
-        elif world.index == 7:
-            image = self.late_three_floor_art
-            self.floor_y = tuple(105 + round((image.h - row) * 520 / image.h)
-                                 for row in (690, 455, 228))
-            draw_region(image, (0, 0, image.w, image.h),
-                        -self.camera_x, 105, WIDTH * 2, 520)
-        else:
-            image, self.floor_y = self.stage_art[world.stage.floors]
-            # Crop the picture frame and draw the corridor as one wide image.
-            edge = 38 if world.stage.floors > 1 else 0
-            draw_region(image, (edge, 0, image.w - edge * 2, image.h),
-                        -self.camera_x, 0, WIDTH * 2, HEIGHT)
+                self._draw_witch_arena_rain(world.time)
         self.animation_time = world.time
         for i in range(24):
             x = (i * 137 + world.time * (7 + i % 4)) % (RIGHT + 48) - self.camera_x
@@ -587,29 +507,6 @@ class View:
         canvas.SDL_SetTextureAlphaMod(image.texture, alpha)
         draw_region(image, (rect['x'], rect['y'], rect['w'], rect['h']), left, bottom, width, height)
         canvas.SDL_SetTextureAlphaMod(image.texture, 255)
-
-    def _draw_wizard_effects(self, time, single_floor=False):
-        # Window positions refer to the shared, full-width castle artwork.
-        sx = WIDTH * 2 / self.wizard_art.w
-        sy = 520 / (self.wizard_art.h - (330 if single_floor else 0))
-        for x0, x1 in ((715, 880), (950, 1110), (1180, 1340), (1405, 1555), (1610, 1765)):
-            window_rows = ((410, 570),) if single_floor else ((85, 250), (410, 570))
-            for top, bottom in window_rows:
-                x = x0 * sx - self.camera_x
-                y = 105 + (self.wizard_art.h - bottom) * sy
-                width, height = (x1 - x0) * sx, (bottom - top) * sy
-                self._wizard_fx_frame('rain', int(time * 4), x, y, width, height, 115)
-                # A brief distant flash shares the same time on both floors.
-                if 9.0 <= time % 18 < 9.5:
-                    storm_frame = 12 + int((time % 18 - 9.0) * 4)
-                    self._wizard_fx_frame('storm', storm_frame, x, y, width, height, 110)
-        if not single_floor:
-            book_frame = min(3, int((time % 7) * 5)) if time % 7 < 0.8 else 0
-            book_width = self.wizard_book.w // 4
-            draw_region(self.wizard_book, (book_frame * book_width, 0, book_width, self.wizard_book.h),
-                        455 * sx - self.camera_x, 105 + (self.wizard_art.h - 260) * sy, 70, 50)
-        self._wizard_fx_frame('potion', int(time * 8), 380 * sx - self.camera_x,
-                              105 + (self.wizard_art.h - 600) * sy, 48, 62)
 
     def _polygon(self, points, colors):
         """삼각형들을 꼭짓점 색으로 채워 그린다. points는 게임 좌표(아래가 0)이고 3개씩 한 삼각형이다."""
@@ -749,11 +646,11 @@ class View:
                 self._wizard_fx_frame('rain', int(time * 4), x, y, width, height, 115)
                 if 9.0 <= time % 18 < 9.5:
                     self._wizard_fx_frame('storm', 12 + int((time % 18 - 9.0) * 4), x, y, width, height, 110)
-        if len(self.floor_y) < 5:
-            return
-        # The arena image is a separate, full-height room; keep rain on its windows.
+
+    def _draw_witch_arena_rain(self, time):
+        """대마녀의 방 창문에 비와 번개를 그린다. 보스방 그림은 바닥 아래 95부터 높이 560으로 그린다."""
         arena = self.witch_boss_arena
-        arena_y = self.floor_y[4] - 95
+        arena_y = self.floor_y[0] - 95
         for x0, x1 in ((460, 700), (720, 950), (970, 1200), (1220, 1450), (1470, 1710)):
             x = x0 * WIDTH * 2 / arena.w - self.camera_x
             y = arena_y + (arena.h - 475) * 560 / arena.h
@@ -765,7 +662,7 @@ class View:
 
     def _draw_map(self, world):
         stage = world.stage
-        for floor, y in enumerate(self.floor_y):
+        for floor, y in enumerate(self.floor_y[:stage.floors] if stage.floors > 1 else ()):   # 한 층짜리 방은 층 표시가 없다
             box(31, y + 108, 57, y + 127, INK)
             self.small.draw(34, y + 117, f'{floor + 1}F', MUTED)
 
@@ -836,7 +733,7 @@ class View:
             draw_grounded(self.plate_art, PLATE_FRAMES[taunted], px, py, 13)
             self.small.draw(px - 28, py - 22, '도발 발판', CYAN if taunted else GOLD)
 
-        if (stage.guard is not None and world.index != 2
+        if (stage.guard is not None
                 and any(enemy.spawn.point == stage.guard for enemy in world.enemies)):
             x, y = stage.guard.x - cam, floor_y[stage.guard.floor]
             color = CYAN if world.guard_open_time > 0 else RED
@@ -912,25 +809,6 @@ class View:
                 x = bridge.left + tile * bridge.tile - cam
                 box(x + 4, y - 4, x + bridge.tile - 4, y, CYAN)
             self.small.draw(left + 10, y + 24, '낭떠러지 · 분신의 빛 발판만 밟을 수 있음', CYAN)
-
-        if stage.lift is not None:
-            lift = stage.lift
-            wx, px = lift.weight.x - cam, lift.platform.x - cam
-            low, high = floor_y[lift.platform.floor], floor_y[lift.platform.floor + 1]
-            weighted = echo is not None and world._near(echo, lift.weight, 22)
-            progress = world.lift_progress
-            platform_y = low + (high - low) * progress
-            weight_y = low - 6 * (1 if weighted else 0) - 10 * progress
-            # 도르래 저울: 분신이 균형 발판(추)을 누르면 사슬이 당겨져 본체 쪽 발판이 위층으로 오른다.
-            pulley_x, pulley_y = (wx + px) / 2, high + 150
-            for end_x, end_y in ((wx, weight_y + 22), (px, platform_y + 20)):
-                line(pulley_x, pulley_y, end_x, end_y, (92, 92, 104))
-                line(pulley_x + 1, pulley_y, end_x + 1, end_y, (40, 40, 48))
-            self._gear(pulley_x, pulley_y, 18, progress * 12 + (now * 0.5 if weighted else 0), weighted)
-            self._draw_puzzle_prop('lift_weight', wx, weight_y - 3, 60, 25, weighted)
-            self.small.draw(wx - 32, weight_y + 26, '균형 발판', CYAN if weighted else GOLD)
-            self._draw_puzzle_prop('lift_platform', px, platform_y - 19, 74, 26, weighted or world.lift_riding)
-            self.small.draw(px - 22, platform_y + 18, '승강', CYAN if weighted else GOLD)
 
         for elevator in stage.elevators:
             x = elevator.x - self.camera_x
@@ -1240,11 +1118,6 @@ class View:
             player_alpha = 130
         player = self._screen_actor(world.player)
         normal_floors = self.floor_y
-        if world.lift_riding:
-            lower = world.stage.lift.platform.floor
-            floors = list(self.floor_y)
-            floors[lower] += (floors[lower + 1] - floors[lower]) * world.lift_progress
-            self.floor_y = tuple(floors)
         floor = self._actor_floor_y(world.player) + world.player.jump_height
         attack = None
         if world.attack_flash > 0:
@@ -1600,9 +1473,6 @@ class View:
         if stage.bridge:
             for x in range(stage.bridge.left, stage.bridge.right, stage.bridge.tile):
                 marker(Point(x + stage.bridge.tile / 2, stage.bridge.floor), (40, 60, 90), 1)
-        if stage.lift:
-            marker(stage.lift.platform, CYAN)
-            marker(stage.lift.weight, GOLD)
 
         marker(stage.exit, CYAN, 3)
         for enemy in world.enemies:

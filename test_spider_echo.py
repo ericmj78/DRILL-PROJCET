@@ -1,8 +1,17 @@
 import unittest
 from unittest.mock import patch
 
-from stages import ACTOR_RADIUS, GATE_HALF_WIDTH, LEFT, RIGHT
+from dataclasses import replace
+
+from stages import ACTOR_RADIUS, GATE_HALF_WIDTH, LEFT, RIGHT, Point
 from world import Actor, Motion, World
+
+
+def spider_room(walls=()):
+    """거미줄을 붙일 천장(위층 바닥)이 있는 방: 간수 보스방(구간 2)을 2층으로 늘리고 walls를 세운다."""
+    w = World(2)
+    w.stage = replace(w.stage, floors=2, walls=walls)
+    return w
 
 
 class SpiderEchoTests(unittest.TestCase):
@@ -158,7 +167,7 @@ class SpiderEchoTests(unittest.TestCase):
     def test_pumping_swings_further_than_hanging(self):
         distances = {}
         for name, push in (('hang', 0), ('pump', 'pump')):
-            w = World(2)   # 벽이 있는 간수 구역
+            w = spider_room()
             w.enemies.clear()
             spider = Actor(1300, 0)
             w._move(spider, Motion(web=True), 'crawler')
@@ -195,7 +204,7 @@ class SpiderEchoTests(unittest.TestCase):
 
     @patch('world.SPIDER_AIM_REACH', 480)
     def test_reeling_in_lifts_the_spider_over_a_wall(self):
-        w = World(2)   # 벽이 있는 간수 구역
+        w = spider_room((Point(1100, 0),))
         w.enemies.clear()
         wall = w.stage.walls[0]
         spider = Actor(wall.x - 60, wall.floor)
@@ -265,7 +274,7 @@ class SpiderEchoTests(unittest.TestCase):
                 self.assertFalse(w.doors[0].pressed)
 
     def test_climbs_actual_wall_obstacle(self):
-        w = World(2)   # 벽이 있는 간수 구역
+        w = spider_room((Point(1100, 0),))
         wall = w.stage.walls[0]
         spider = Actor(wall.x - GATE_HALF_WIDTH - ACTOR_RADIUS, wall.floor)
         w._move(spider, Motion(stairs=1), 'crawler')

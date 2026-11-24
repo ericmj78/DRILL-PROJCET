@@ -253,8 +253,6 @@ class World:
         self.isolation_changed_at = -9.0     # 격리실 철창이 마지막으로 움직인 시각 (떨어지는 연출용)
         bridge = self.stage.bridge
         self.bridge_tiles = [0.0] * (-(-(bridge.right - bridge.left) // bridge.tile)) if bridge else []
-        self.lift_progress = 0.0
-        self.lift_riding = False
         self._update_doors(0)
 
     @property
@@ -319,9 +317,6 @@ class World:
             return
         if self.recording is None and self.player.jump_time > 0:
             self.notify('착지한 뒤 분신 녹화를 시작하세요.')
-            return
-        if self.lift_riding:
-            self.notify('발판이 멈춘 뒤 녹화하세요.')
             return
         if self.recording is None:
             self.start_recording()
@@ -438,7 +433,7 @@ class World:
             self.attack_hit_pending = False
             self._apply_attack()
         player_x, player_floor = self.player.x, self.player.floor
-        if recording is None and not self.lift_riding and not (self.gravity_field and self.gravity_field.captured):
+        if recording is None and not (self.gravity_field and self.gravity_field.captured):
             self._move(self.player, motion)
             self._block_body(player_x, player_floor)
         elif recording is not None:
@@ -497,7 +492,6 @@ class World:
         self._update_bridge()
         if self.result != 'playing':
             return
-        self._update_lift()
         self._update_watch()
         if self.result != 'playing':
             return
@@ -558,7 +552,6 @@ class World:
             x = next((stair.x for stair in self.stage.elevators + self.stage.stairs if stair.lower == floor),
                      self.stage.start.x)
         self.player = Actor(x, floor, self.player.facing)
-        self.lift_riding = False
         self._update_doors(0)
         self.notify(f'{floor + 1}층으로 이동했습니다.')
         return True
@@ -575,7 +568,7 @@ class World:
     def taunt_plate(self) -> Point | None:
         """수호자 앞의 도발 발판. 분신이 그 위에 서면 수호자는 분신만 노린다."""
         guard = self.stage.guard
-        if guard is None or self.index == 2:
+        if guard is None:
             return None
         return Point(guard.x - TAUNT_OFFSET, guard.floor)
 
@@ -587,7 +580,7 @@ class World:
 
     def _block_body(self, x: float, floor: int):
         # 처치 불가 적은 본체가 몸으로 지나갈 수 없다. 분신으로 유인하거나 다른 층으로 돌아간다.
-        if self.index == 2 or self.player.floor != floor:
+        if self.player.floor != floor:
             return
         for enemy in self.enemies:
             if (enemy.health is None and enemy.spawn.point != self.stage.guard and enemy.actor.floor == floor
@@ -604,7 +597,7 @@ class World:
                 yield room.door.x
             if not self.isolation_closed and room.exit_gate.floor == floor:
                 yield room.exit_gate.x
-        if (self.index != 2 and self.stage.guard and self.stage.guard.floor == floor
+        if (self.stage.guard and self.stage.guard.floor == floor
                 and self.guard_open_time == 0
                 and any(enemy.spawn.point == self.stage.guard for enemy in self.enemies)):
             yield self.stage.guard.x
@@ -1344,27 +1337,6 @@ class World:
             self.invulnerable = 0
             self.hurt(max(1, round(self.max_health * HAZARD_RATIO)),
                       '낭떠러지에 떨어졌습니다! 분신이 지나간 빛 발판만 밟으세요.')
-
-    def _update_lift(self):
-        lift = self.stage.lift
-        if lift is None:
-            return
-        weighted = self.echo is not None and self._near(self.echo.actor, lift.weight, 22)
-        if not self.lift_riding and weighted and self._near(self.player, lift.platform, 18):
-            self.lift_riding = True
-            self.player.x = lift.platform.x
-            self.player.moving = False
-        if not self.lift_riding:
-            return
-        self.lift_progress = max(0, min(1, self.lift_progress + (STEP if weighted else -STEP)))
-        if self.lift_progress >= 1:
-            self.player.floor = lift.platform.floor + 1
-            self.lift_riding = False
-            self.lift_progress = 0
-            self.notify('균형 발판이 위층에 도착했습니다.')
-        elif self.lift_progress <= 0 and not weighted:
-            self.lift_riding = False
-            self.notify('분신이 사라져 발판이 내려왔습니다.')
 
     def _clear_line(self, first: Actor, second: Actor, distance: float) -> bool:
         if first.elevator_target is not None or second.elevator_target is not None:
