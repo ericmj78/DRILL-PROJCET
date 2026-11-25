@@ -6,6 +6,7 @@
 수치를 바꾸려면 SKILLS 표와 각 스킬의 Effect 값을 고치면 된다.
 """
 from dataclasses import dataclass
+from math import hypot
 
 from stages import LEFT, RIGHT, STEP
 
@@ -44,6 +45,9 @@ class Effect:
     damage: int = 0
     drop: float = 0.0         # 이 높이에서 떨어지기 시작해 life가 끝날 때 바닥에 닿는다(낙석)
     shake: float = 0.0        # hit_at 순간에 화면을 흔드는 시간
+    homing: bool = False      # 본체 몸 가운데를 쫓아 공중으로도 날아간다 (추적 불빛)
+    vx: float = 0.0
+    vh: float = 0.0
 
 
 @dataclass
@@ -69,8 +73,15 @@ SKILLS = {
     ),
     'grand_witch': (
         Skill('gravity', '중력 생성! 반대 방향키로 저항하세요.', 0.90, 0.10, 0.40, 0, 900),
-        Skill('bolts', '대마녀의 낙뢰! 바닥의 문양에서 벗어나세요.', 0.50, 0.90, 0.35, 0, 900, 9),
-        Skill('orb', '대마녀의 마력 구체! 점프로 넘으세요.', 0.50, 0.20, 0.45, 0, 900, 8),
+        Skill('laser', '마력 광선! 다른 높이로 피하세요 (2단 점프·섬).', 0.90, 0.70, 0.50, 0, 2200, 9),
+        Skill('homing', '추적하는 불빛! 계속 움직이고, 닿기 직전 대시로 뚫으세요.', 0.60, 0.10, 0.60, 0, 2200, 5),
+    ),
+    # 빗자루를 탄 뒤(world.py의 broom): 본체 너머로 순간이동하며 광선과 불빛을 쏜다. 높이와 쫓아가기는 world.py가 맡는다.
+    'grand_witch_broom': (
+        Skill('teleport', '대마녀가 사라졌습니다!', 0.60, 0.45, 0.25, 0, 9999),
+        Skill('laser', '마력 광선! 다른 높이로 피하세요 (2단 점프·섬).', 0.80, 0.70, 1.20, 0, 9999, 9),
+        Skill('teleport', '대마녀가 사라졌습니다!', 0.60, 0.45, 0.25, 0, 9999),
+        Skill('homing', '추적하는 불빛! 계속 움직이고, 닿기 직전 대시로 뚫으세요.', 0.50, 0.10, 1.20, 0, 9999, 5),
     ),
     'echo_knight': (
         Skill('charge', '잔향 기사의 돌진! 점프로 피하세요.', 0.60, 0.55, 0.60, 140, 560, 11),
@@ -82,10 +93,15 @@ CHARGE_SPEED = 520
 CHAIN_REACH = 190  # 쇠사슬이 닿는 앞쪽 거리
 ROCK_FALL = 0.9    # 바위가 떨어지는 데 걸리는 시간
 CONFUSED_SECONDS = 1.2   # 낙석에 맞으면 이만큼 기절해 움직이지도 공격하지도 못한다
+TELEPORT_PAST = 320      # 빗자루 대마녀는 본체 너머 이만큼 떨어진 자리로 순간이동한다
+BODY = 45                # 본체 몸 가운데 높이 (발밑에서)
+LASER_HALF = 32          # 광선 두께의 반. 몸 가운데가 이 안에 들면 맞는다
+HOMING_SPEED = 170       # 추적 불빛의 속도 (본체 걸음 230보다 느리다)
+HOMING_TURN = 2.2        # 불빛이 방향을 트는 빠르기 (초당)
 
 
 def current(enemy) -> Skill | None:
-    return next((skill for skill in SKILLS.get(enemy.spawn.kind, ()) if skill.name == enemy.skill), None)
+    return next((skill for skill in _skills(enemy) if skill.name == enemy.skill), None)
 
 
 def phase(enemy):
@@ -101,12 +117,22 @@ def phase(enemy):
     return 'rest', (time - skill.telegraph - skill.active) / skill.rest
 
 
+def _flying(enemy) -> bool:
+    return getattr(enemy, 'broom', None) is not None
+
+
+def _skills(enemy):
+    return SKILLS['grand_witch_broom'] if _flying(enemy) else SKILLS.get(enemy.spawn.kind, ())
+
+
 def update(world, enemy) -> bool:
     """보스 한 마리의 스킬을 한 스텝 진행한다. 스킬을 쓰는 중이면 True(기본 행동을 건너뛴다)."""
-    skills = SKILLS.get(enemy.spawn.kind)
+    skills = _skills(enemy)
     if not skills:
         return False
     actor, target = enemy.actor, enemy.target
+    if _flying(enemy) and target is None:
+        target = world.player   # 하늘의 대마녀는 높이가 달라 본체를 놓쳐도 스킬은 쓴다
     skill = current(enemy)
     if skill is None:
         if target is None:
@@ -126,6 +152,12 @@ def update(world, enemy) -> bool:
                 if skills[index].name == 'gravity':
                     x = max(LEFT + 100, min(RIGHT - 100, target.x + actor.facing * 90))
                     world.gravity_field = GravityField(x, actor.floor)
+                elif skills[index].name == 'laser':
+                    # 광선은 지금 본체 몸 높이를 가로지른다. 예고 동안 다른 높이로 옮겨야 한다.
+                    enemy.laser_h = max(20.0, min(330.0, target.jump_height + BODY))
+                elif skills[index].name == 'teleport':
+                    side = 1 if target.x >= actor.x else -1   # 본체를 넘어 반대편으로
+                    enemy.teleport_to = max(LEFT + 120, min(RIGHT - 120, target.x + side * TELEPORT_PAST))
                 return True
         return False
 
@@ -170,6 +202,27 @@ def update(world, enemy) -> bool:
         for delay, ahead in ((0.0, 0), (0.4, 130)):
             effects.append(Effect('lightning-strike', aim.x + aim.facing * ahead, actor.floor, age=-delay,
                                   hit_at=0.86, hit_for=0.10, radius=34, damage=skill.damage))
+    elif skill.name == 'laser' and active:
+        for body in (world.player, *world.echo_actors()):
+            if (body.floor == actor.floor and (body.x - actor.x) * actor.facing > 0
+                    and abs(body.jump_height + BODY - enemy.laser_h) <= LASER_HALF):
+                if body is world.player:
+                    world.hurt(skill.damage, '대마녀의 마력 광선에 맞았습니다.')
+                else:
+                    world.hurt_echo(body, skill.damage)
+    elif skill.name == 'homing' and fired:
+        # 지팡이 끝에서 불빛 셋이 위·앞·아래로 퍼져 나갔다가 본체를 쫓아온다.
+        for vh in (220, 60, -100):
+            effects.append(Effect('arcane-orb', actor.x + actor.facing * 70, actor.floor, scale=0.45,
+                                  lift=actor.base + 130, life=5.0, radius=20, damage=skill.damage,
+                                  homing=True, vx=actor.facing * 160, vh=vh))
+    elif skill.name == 'teleport':
+        if before == 0:
+            effects.append(Effect('blink-out', actor.x, actor.floor, lift=actor.base + 40, scale=3.0, life=1.6))
+        if fired:
+            actor.x = enemy.teleport_to
+            actor.facing = 1 if world.player.x >= actor.x else -1
+            effects.append(Effect('blink-in', actor.x, actor.floor, lift=actor.base + 40, scale=3.0, life=1.4))
     elif skill.name == 'orb' and fired:
         effects.append(Effect('arcane-orb', actor.x + actor.facing * 40, actor.floor, actor.facing, scale=0.9,
                               speed=250, life=2.6, hit_at=0.0, hit_for=2.6, radius=22, jumpable=True,
@@ -224,12 +277,32 @@ def update_gravity(world, horizontal):
     world._move_x(player, (1 if distance > 0 else -1) * 180 * STEP)
 
 
+def _home(world, effect):
+    """추적 불빛: 본체 몸 가운데 쪽으로 천천히 방향을 틀며 날아간다. 닿으면 터진다 (대시 중엔 뚫고 지나간다)."""
+    player = world.player
+    dx, dh = player.x - effect.x, player.jump_height + BODY - effect.lift
+    distance = hypot(dx, dh) or 1.0
+    turn = min(1.0, HOMING_TURN * STEP)
+    effect.vx += (dx / distance * HOMING_SPEED - effect.vx) * turn
+    effect.vh += (dh / distance * HOMING_SPEED - effect.vh) * turn
+    effect.x += effect.vx * STEP
+    effect.lift += effect.vh * STEP
+    if player.floor == effect.floor and distance <= effect.radius + 14:
+        if world.hurt(effect.damage, '추적하는 불빛에 맞았습니다.'):
+            effect.age = effect.life
+            world.boss_effects.append(Effect('zap-hit', player.x, player.floor, lift=player.jump_height + 30,
+                                             scale=0.8, life=0.6))
+
+
 def update_effects(world):
     """이펙트를 한 스텝 진행하고, 맞는 범위 안의 본체에게 피해를 준다."""
     player = world.player
     for effect in world.boss_effects:
         effect.age += STEP
         if effect.age < 0:
+            continue
+        if effect.homing:
+            _home(world, effect)
             continue
         effect.x += effect.facing * effect.speed * STEP
         if effect.shake and effect.hit_at is not None and effect.hit_at <= effect.age < effect.hit_at + STEP:

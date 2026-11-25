@@ -84,5 +84,30 @@ class WitchIslandTests(unittest.TestCase):
         self.assertEqual(w.player.base, 0)
 
 
+class WitchBroomTests(unittest.TestCase):
+    """대마녀는 체력이 절반 이하가 되면 빗자루에 올라타(그동안 무적) 공중으로 떠오른다."""
+
+    def test_mounts_at_half_health_then_flies(self):
+        from stages import STEP
+        from world import BROOM_HEIGHT, BROOM_MOUNT, Motion
+        w = World(5)
+        witch = w.enemies[0]
+        w.player.x = witch.actor.x + 600   # 기본 공격이 닿지 않는 거리
+        witch.health = witch.max_health // 2
+        w.step(Motion())
+        self.assertIsNotNone(witch.broom)
+        self.assertEqual(witch.actor.base, 0)
+        health = witch.health   # 타는 동안은 베어도 줄지 않는다
+        w.player.x, w.player.facing = witch.actor.x - 40, 1
+        w._attack()
+        w._apply_attack()
+        self.assertEqual(witch.health, health)
+        w.player.x = witch.actor.x + 600
+        for _ in range(round((BROOM_MOUNT + 1.5) / STEP)):
+            w.step(Motion())
+        self.assertAlmostEqual(witch.actor.base, BROOM_HEIGHT, delta=1)
+        self.assertGreater(w.health, 0)
+
+
 if __name__ == '__main__':
     unittest.main()

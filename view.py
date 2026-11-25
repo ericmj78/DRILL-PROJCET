@@ -1054,6 +1054,10 @@ class View:
             tint = (255, 166, 156) if enemy.flash > 0 else (255, 255, 255)
             pose = attack_pose(enemy.spawn.kind, enemy.windup, enemy.recovery)
             skill_phase = boss_skills.phase(enemy)
+            opacity = 255
+            if enemy.skill == 'teleport' and skill_phase and skill_phase[0] != 'rest':
+                # 순간이동: 사라졌다가(예고) 새 자리에서 나타난다(발동)
+                opacity = round(255 * (1 - skill_phase[1] if skill_phase[0] == 'telegraph' else skill_phase[1]))
             if skill_phase is not None:
                 pose = skill_pose(enemy.spawn.kind, *skill_phase)
             if world.index == 0 and enemy.spawn.kind in monster_sprite.KINDS:
@@ -1061,8 +1065,9 @@ class View:
                                                 enemy.windup, enemy.recovery, tint=tint)
             elif enemy.spawn.kind in monster_sprite.ANYWHERE:   # PixelLab 시트: 이동·공격이 시트 안에 있다
                 self.monster_sprite.draw(enemy.spawn.kind, screen_enemy.actor, y, world.time,
-                                         enemy.windup, enemy.recovery, tint=tint,
-                                         skill=(enemy.skill, *skill_phase) if skill_phase else None)
+                                         enemy.windup, enemy.recovery, opacity=opacity, tint=tint,
+                                         skill=(enemy.skill, *skill_phase) if skill_phase else None,
+                                         broom=enemy.broom)
             elif enemy.spawn.kind == 'echo_knight':
                 self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
                 if skill_phase is None and pose is not None:
@@ -1123,6 +1128,7 @@ class View:
                 box(x - 8 - 26 * fall, y - 3, x + 8 + 26 * fall, y + 3, (0, 0, 0, round(70 + 110 * fall)))
                 y += effect.drop * (1 - fall * fall)
             draw_sheet(self.attack_fx[effect.sheet], effect.age, x, y, effect.facing, effect.scale)
+        self._draw_witch_laser(world)
         if world.skill_unlock_time > 0:
             # 간수의 방에 처음 들어오면 능력 획득 알림판이 화면 위쪽에 미끄러져 들어온다.
             draw_sheet(self.attack_fx['skill-unlock'], SKILL_UNLOCK_SECONDS - world.skill_unlock_time,
@@ -1265,6 +1271,35 @@ class View:
         draw_region(image, region, actor.x - draw_width / 2, floor_y, draw_width, size,
                     flip=actor.facing != -1)
         canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+
+    def _draw_witch_laser(self, world):
+        """대마녀의 마력 광선. 예고 때는 지나갈 높이에 가는 선이 깜빡이고 마력이 모이며, 발동하면 방 끝까지 뻗는다."""
+        for enemy in world.enemies:
+            phase = boss_skills.phase(enemy)
+            if enemy.skill != 'laser' or phase is None or phase[0] == 'rest':
+                continue
+            actor = enemy.actor
+            y = self.floor_y[actor.floor] + enemy.laser_h
+            x0 = actor.x + actor.facing * 60 - self.camera_x
+            x1 = (RIGHT if actor.facing > 0 else LEFT) - self.camera_x
+            if phase[0] == 'telegraph':
+                alpha = 60 + round(150 * phase[1] * abs(sin(world.time * 16)))
+                box(min(x0, x1), y - 1, max(x0, x1), y + 1, (226, 150, 255, alpha))
+                draw_sheet(self.attack_fx['spell-charge'], world.time, x0, y - 22 * 1.4, actor.facing, 1.4)
+                continue
+            # 발동: pixelfx arcane-beam 한 칸을 광원·몸통·끝 불꽃 세 조각으로 나눠 몸통만 방 끝까지 늘린다.
+            image, meta = self.attack_fx['arcane-beam']
+            frame = int(world.time * meta['fps']) % meta['frames']
+            w, h = meta['frameSize']
+            sx, sy = frame % meta['columns'] * w, frame // meta['columns'] * h
+            scale, head, tail = 1.4, 60, 84
+            body = max(0.0, abs(x1 - x0) - (head + tail) * scale)
+            bottom = y - (h - 60) * scale   # 원본 칸에서 광선 가운데는 위에서 60줄
+            offset = 0.0
+            for src_x, src_w, dest_w in ((0, head, head * scale), (head, w - head - tail, body), (w - tail, tail, tail * scale)):
+                left = x0 + offset if actor.facing > 0 else x0 - offset - dest_w
+                draw_region(image, (sx + src_x, sy, src_w, h), left, bottom, dest_w, h * scale, actor.facing < 0)
+                offset += dest_w
 
     def _draw_dash_trail(self, actor):
         """대시 잔상: 지나온 길에 은빛 분신 그림이 4개 남았다가 뒤쪽부터 흐려진다 (잔향)."""
@@ -1682,7 +1717,7 @@ class View:
                  ('magic_armor', '마법으로 움직이는 갑옷입니다.'),
                  ('magic_armor_guard', '격리실로 유인할 수 있는 갑옷 경비병입니다.'),
                  ('witch', '마법사의 성에 있는 마녀입니다.'),
-                 ('grand_witch', '보스. 중력장, 낙뢰, 마력 구체를 사용합니다.')),
+                 ('grand_witch', '보스. 중력장, 마력 광선, 추적 불빛을 쓰고, 체력이 절반이 되면 빗자루를 타고 하늘에서 순간이동합니다.')),
                 (('time_thief', '후반 구역을 지키는 시간 도둑입니다.'),
                  ('cursed_lantern', '후반 구역을 순찰하는 저주받은 등불입니다.'),
                  ('broken_jester', '후반 구역을 순찰하는 광대 인형입니다.'),

@@ -77,5 +77,6 @@
   "attack_fx/confused.png": "attack_fx/혼란.png",
   "attack_fx/level-up.png": "attack_fx/레벨업.png",
   "attack_fx/feather-burst.png": "attack_fx/깃털_폭발.png",
-  "attack_fx/skill-unlock.png": "attack_fx/능력_획득.png"
+  "attack_fx/skill-unlock.png": "attack_fx/능력_획득.png",
+  "attack_fx/spell-charge.png": "attack_fx/마력_충전.png"
 }

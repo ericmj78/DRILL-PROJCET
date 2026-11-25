@@ -8,6 +8,7 @@ from pico2d import pico2d as canvas
 import sdl2
 
 from animation import draw_region
+from world import BROOM_MOUNT
 
 KINDS = frozenset(('crawler', 'watcher', 'tier_ghost'))
 GHOST_SCALE, GHOST_TINT, GHOST_ALPHA = 0.75, (190, 170, 255), 205
@@ -29,7 +30,10 @@ JAILER = {'sheet': 'PixelLab/몬스터/jailer', 'size': (256, 176), 'feet': 170,
           'skills': {'chain': 3, 'rockfall': 4, 'charge': 5}}
 # 2스테이지 보스 대마녀(pixellab_witch.py): 간수와 같은 줄 배치, 기술은 중력·낙뢰·마력 구체. 2배로 그린다.
 GRAND_WITCH = {'sheet': 'PixelLab/몬스터/grand_witch', 'size': (256, 176), 'feet': 170, 'center': 144, 'scale': 2,
-               'skills': {'gravity': 3, 'bolts': 4, 'orb': 5}}
+               'skills': {'gravity': 3, 'bolts': 4, 'orb': 5, 'teleport': 3, 'laser': 4, 'homing': 5}}
+# 대마녀 2페이즈(pixellab_witch_broom.py): 빗자루 타기 8(바닥에 선 채 시작해 떠오른다) / 비행 8 / 빗자루 공격 8.
+# 칸과 발밑은 대마녀 시트와 같아서, 탄 자세는 발밑보다 54px(27칸 × 2) 위에 그려진다.
+BROOM = {**GRAND_WITCH, 'sheet': 'PixelLab/몬스터/grand_witch_broom'}
 WALKERS = frozenset(('crawler', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
 ANYWHERE = frozenset(('magic_book', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
 
@@ -55,22 +59,30 @@ def skill_frame(phase, progress):
 class MonsterSprite:
     def __init__(self, load):
         self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME, beast=BEAST,
-                         jailer_boss=JAILER, grand_witch=GRAND_WITCH)
+                         jailer_boss=JAILER, grand_witch=GRAND_WITCH, grand_witch_broom=BROOM)
         self.sheets = {(kind, echo): load(f'{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
         for image in self.sheets.values():   # 2배로 키우는 보스도 도트가 흐려지지 않게
             sdl2.SDL_SetTextureScaleMode(image.texture, sdl2.SDL_ScaleModeNearest)
 
     def draw(self, kind, actor, floor_y, time, windup=0.0, recovery=0.0, opacity=255,
-             tint=(255, 255, 255), echo=False, skill=None):
-        """skill: 보스 기술 (이름, 단계, 진행도) 또는 None. 기술 줄이 있는 몬스터만 쓴다."""
+             tint=(255, 255, 255), echo=False, skill=None, broom=None):
+        """skill: 보스 기술 (이름, 단계, 진행도) 또는 None. 기술 줄이 있는 몬스터만 쓴다.
+        broom: 대마녀가 빗자루에 오른 뒤 지난 시간 또는 None."""
         ghost = kind == 'tier_ghost'
-        base = 'watcher' if ghost else kind
+        base = 'watcher' if ghost else 'grand_witch_broom' if broom is not None else kind
         info = self.meta[base]
         width, height = info['size']
         scale = info.get('scale', 1) * (GHOST_SCALE if ghost else 1.0)
         frame = attack_frame(windup, recovery)
-        if skill is not None and skill[0] in info.get('skills', {}):
+        if broom is not None:   # 타기 → 비행, 기본 공격과 마법은 빗자루 공격 줄
+            if broom < BROOM_MOUNT:
+                row, column = 0, min(7, int(broom / BROOM_MOUNT * 8))
+            elif skill is not None or frame is not None:
+                row, column = 2, skill_frame(*skill[1:]) if skill is not None else frame
+            else:
+                row, column = 1, int(time * 8) % 8
+        elif skill is not None and skill[0] in info.get('skills', {}):
             row, column = info['skills'][skill[0]], skill_frame(*skill[1:])
         elif frame is not None:
             row, column = 1, frame

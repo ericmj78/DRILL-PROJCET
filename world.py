@@ -62,6 +62,10 @@ NO_MOVES_SECTIONS = (0, 1)
 DASH_SPEED = 900           # px/s. 한 번에 약 145px
 DASH_TIME = 0.16           # 대시하는 동안은 맞지 않는다
 DASH_COOLDOWN = 0.55
+# 대마녀 2페이즈: 체력이 절반 이하가 되면 빗자루에 올라타(그동안 무적) 공중을 날며 마법을 쓴다.
+BROOM_MOUNT = 1.0          # 타는 연출 시간 (grand_witch_broom 시트 0줄 8칸)
+BROOM_HEIGHT = 110         # 나는 높이. 하늘 섬(90·135)이나 2단 점프로 올라가야 벨 수 있다
+BROOM_DIVE, BROOM_RISE = 420, 180   # 기본 공격 때 본체 쪽으로 급강하하는 속도, 다시 떠오르는 속도 (px/s)
 SKILL_UNLOCK_SECONDS = 2.4  # 처음 쓸 수 있게 된 구역에서 능력 획득 알림판(pixelfx ui/achievement)이 보이는 시간
 
 
@@ -203,6 +207,9 @@ class Enemy:
     skill_cooldown: float = 0
     skill_index: int = 0
     boss_engaged: bool = False  # 보스가 본체를 한 번 발견했는지
+    broom: float | None = None  # 대마녀가 빗자루에 오른 뒤 지난 시간 (None = 아직 걸어 다님)
+    laser_h: float = 0.0        # 마력 광선이 지나가는 높이
+    teleport_to: float = 0.0    # 빗자루 대마녀가 순간이동할 x (본체 너머)
 
 
 def approach_direction(start: float, end: float) -> int:
@@ -1470,7 +1477,7 @@ class World:
         reach = round(weapon.reach * (0.8 if self.attack_kind == 'slash' else 1.3))
         damage = max(1, attack_power(self.level) + weapon.bonus + (1 if self.attack_kind == 'slash' else 0))
         for enemy in self.enemies:
-            if not self._in_reach(enemy, reach):
+            if not self._in_reach(enemy, reach) or (enemy.broom is not None and enemy.broom < BROOM_MOUNT):
                 continue
             self.hit_sparks.append([enemy.actor.x, enemy.actor.floor, 0.0])
             if enemy.health is None:
@@ -1557,6 +1564,21 @@ class World:
             enemy.target = self.echo.actor
             enemy.last_seen = self.echo.actor.x
 
+        if (enemy.broom is None and enemy.spawn.kind == 'grand_witch'
+                and enemy.health is not None and enemy.health <= enemy.max_health / 2):
+            enemy.broom, enemy.skill, enemy.windup, enemy.recovery = 0.0, '', 0, 0
+            self.notify('대마녀가 빗자루에 올라탔습니다! 하늘 섬이나 2단 점프로 올라가 베세요.')
+        flying = enemy.broom is not None
+        if flying:
+            enemy.broom += STEP
+            if enemy.broom < BROOM_MOUNT:
+                return
+            # 기본 공격 준비 중에는 본체 높이로 급강하하고, 아니면 나는 높이로 떠오른다.
+            goal = (max(0, enemy.target.jump_height - 20) if enemy.windup > 0 and enemy.target is not None
+                    else BROOM_HEIGHT)
+            limit = (BROOM_DIVE if goal < actor.base else BROOM_RISE) * STEP
+            actor.base += max(-limit, min(limit, goal - actor.base))
+
         if boss_skills.update(self, enemy):
             return
 
@@ -1568,13 +1590,16 @@ class World:
             return
 
         if enemy.target is not None:
-            if enemy.recovery == 0 and self._clear_line(actor, enemy.target, kind.attack_range):
+            # 나는 대마녀는 높이가 달라도 바로 위에 오면 급강하 공격을 시작한다.
+            in_range = (abs(actor.x - enemy.target.x) <= kind.attack_range and actor.floor == enemy.target.floor
+                        if flying else self._clear_line(actor, enemy.target, kind.attack_range))
+            if enemy.recovery == 0 and in_range:
                 enemy.windup = 0.31
                 actor.facing = approach_direction(actor.x, enemy.target.x) or actor.facing
                 return
             # 놓친 표적의 마지막 위치를 밟고 서지 않는다. 사다리로 내려온 본체와 겹치지 않게 한다.
             if enemy.recovery == 0 and abs(actor.x - enemy.last_seen) > kind.attack_range:
-                self._walk_enemy(actor, enemy.last_seen, kind.speed)
+                self._walk_enemy(actor, enemy.last_seen, kind.speed * (1.6 if flying else 1), floating=flying)
             return
 
         destination = left if enemy.patrol_direction < 0 else right

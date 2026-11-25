@@ -142,7 +142,17 @@ class Bot:
             toward = 1 if gap >= 0 else -1
             if self.dodge(foe):
                 continue
+            flying = getattr(foe, 'broom', None) is not None and foe.actor.base > 40
             if foe.windup > 0 and abs(gap) < 90:
+                self.tick(-toward)
+            elif flying and abs(gap) <= 118 and self.me.facing == toward:
+                # 하늘의 대마녀: 점프 → 꼭대기에서 2단 점프하며 몸 높이에 닿으면 찌른다.
+                me = self.me
+                grounded = me.jump_time == 0 and not me.fall_speed
+                reach = me.jump_height >= foe.actor.base - 30
+                jump = grounded or (not me.air_jumped and me.jump_time >= 0.28)
+                self.tick(jump=jump, attack='thrust' if reach else False)
+            elif foe.windup > 0 and abs(gap) < 90:
                 self.tick(-toward)
             elif abs(gap) > 118 or self.me.facing != toward:
                 self.tick(toward)
@@ -163,7 +173,29 @@ class Bot:
             # 쇠사슬은 닿는 거리 밖으로 물러난다.
             self.tick(-1 if foe.actor.x > me.x else 1)
             return True
+        field = self.w.gravity_field
+        if field is not None and field.captured:
+            self.tick(field.escape_direction)   # 중력 구체에 갇히면 반대 방향키로 버틴다
+            return True
+        if (skill and skill.name == 'laser' and foe.skill_time < skill.telegraph + skill.active
+                and (me.x - foe.actor.x) * foe.actor.facing > 0
+                and abs(me.jump_height + boss_skills.BODY - foe.laser_h) <= boss_skills.LASER_HALF + 10):
+            # 광선이 지나갈 높이에 있으면 예고 끝 무렵 점프하고, 꼭대기에서 2단 점프해 그 높이를 벗어난다.
+            grounded = me.jump_time == 0 and not me.fall_speed
+            if grounded and foe.skill_time >= skill.telegraph - 0.2:
+                self.tick(jump=True)
+                return True
+            if not grounded and not me.air_jumped and me.jump_time >= 0.28:
+                self.tick(jump=True)
+                return True
         for effect in self.w.boss_effects:
+            if effect.homing:
+                # 추적 불빛은 닿기 직전 그쪽으로 대시해 무적 시간으로 뚫고 지나간다.
+                gap = effect.x - me.x
+                if abs(gap) < 60 and abs(effect.lift - me.jump_height - boss_skills.BODY) < 60 and me.dash_cooldown == 0:
+                    self.tick(1 if gap > 0 else -1, dash=True)
+                    return True
+                continue
             if effect.hit_at is None or effect.floor != me.floor or effect.age > effect.hit_at + effect.hit_for:
                 continue
             distance = effect.x - me.x
