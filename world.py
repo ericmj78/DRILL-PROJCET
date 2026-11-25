@@ -801,9 +801,16 @@ class World:
                 if abs(actor.x - x) <= half:
                     yield float(height)
 
+    def _end_jump(self, actor: Actor):
+        """점프 포물선이 끝났다. 발판에서 뛰어 디딜 곳이 없으면 포물선 끝의 내려오던 속도로 이어서 떨어진다
+        (0부터 다시 떨어지면 공중에서 멈칫한다)."""
+        actor.jump_time = 0.0
+        if actor.base not in self._ground_heights(actor):
+            actor.fall_speed = 4 * actor.jump_peak / actor.jump_duration
+
     def _settle(self, actor: Actor, before: float):
         """발판 착지와 낙하. 점프가 내려오다 발판 높이를 지나면 그 위에 선다."""
-        if (not self.stage.pits and not self.stage.platforms) or actor.elevator_target is not None \
+        if (not self.stage.pits and not self.stage.platforms and not self.stage.sky) or actor.elevator_target is not None \
                 or actor.web_time > 0 or actor.door_climb_time > 0:
             return
         if actor.jump_time > 0:
@@ -1181,7 +1188,7 @@ class World:
             elif actor.jump_time > 0:
                 actor.jump_time += STEP
                 if actor.jump_time >= actor.jump_duration:
-                    actor.jump_time = 0.0
+                    self._end_jump(actor)
                     actor.beast_super_jump = False
             if motion.horizontal:
                 actor.facing = motion.horizontal
@@ -1199,7 +1206,7 @@ class World:
         elif actor.jump_time > 0:
             actor.jump_time += STEP
             if actor.jump_time >= actor.jump_duration:
-                actor.jump_time = 0.0
+                self._end_jump(actor)
         self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
         if motion.stairs and actor.jump_time == 0 and actor.base == 0 and actor.fall_speed == 0:
             lower = actor.floor if motion.stairs > 0 else actor.floor - 1
