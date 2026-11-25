@@ -13,6 +13,8 @@ from title_menu import BossSelector, TitleMenu
 from view import HEIGHT, WIDTH, View
 from world import Motion, World
 
+DOUBLE_TAP = 0.25   # 같은 방향키를 이 시간(초) 안에 다시 누르면 대시
+
 
 def advance_stage_section(world):
     """Continue a merged stage while preserving the player's progress."""
@@ -47,6 +49,8 @@ def main():
         pending_jump = False
         pending_web = False
         pending_release = False
+        pending_dash = False
+        last_tap = {}        # 방향키를 마지막으로 누른 시각 (두 번 연타하면 대시)
         pending_attack = False
         accumulator = 0.0
         previous = perf_counter()
@@ -228,6 +232,10 @@ def main():
                 if world.result != 'playing':
                     continue
                 if key in (SDLK_LEFT, SDLK_RIGHT):
+                    if key not in pressed:   # 꾹 누를 때 반복되는 입력은 세지 않는다
+                        if now - last_tap.get(key, -9) < DOUBLE_TAP:
+                            pending_dash = True   # 같은 방향키를 빠르게 두 번 → 그쪽으로 대시 (간수의 방부터)
+                        last_tap[key] = now
                     pressed.add(key)
                 elif key == SDLK_SPACE and key not in pressed:
                     pressed.add(key)
@@ -239,8 +247,11 @@ def main():
                     world.notify('거미줄 조준을 취소했습니다.')
                 elif key in (SDLK_UP, SDLK_DOWN):
                     pending_stairs = 1 if key == SDLK_UP else -1
-                    if world.recording is not None and world.recording.monster_kind == 'crawler':
-                        pressed.add(key)
+                    if key == SDLK_UP and key not in pressed:
+                        if now - last_tap.get(key, -9) < DOUBLE_TAP:
+                            pending_dash, pending_stairs = True, 0   # ↑↑ → 위로 대시 (두 번째 ↑는 사다리에 쓰지 않는다)
+                        last_tap[key] = now
+                    pressed.add(key)   # ↑를 누른 채 ←←/→→ 하면 대각선 위로 대시한다
                 elif key == SDLK_c and key not in pressed:
                     pressed.add(key)
                     if (world.recording is None and world.monster_echoes
@@ -283,7 +294,8 @@ def main():
                             stairs = int(SDLK_UP in pressed) - int(SDLK_DOWN in pressed)
                         world.step(Motion(horizontal, stairs, pending_jump, pending_web,
                                           SDLK_SPACE in pressed, SDLK_f in pressed,
-                                          release=pending_release), pending_attack)
+                                          release=pending_release, dash=pending_dash,
+                                          dash_up=pending_dash and SDLK_UP in pressed), pending_attack)
                     next_world = advance_stage_section(world)
                     if next_world is not world:
                         world = next_world
@@ -292,6 +304,7 @@ def main():
                 pending_jump = False
                 pending_web = False
                 pending_release = False
+                pending_dash = False
                 pending_attack = False
                 accumulator -= STEP
 

@@ -26,7 +26,7 @@ from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
 from stages import PLATE_RANGE, Point
-from world import JUMP_DURATION, LEVEL_UP_SECONDS, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
+from world import DASH_TIME, JUMP_DURATION, LEVEL_UP_SECONDS, SKILL_UNLOCK_SECONDS, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -1112,6 +1112,10 @@ class View:
                 box(x - 8 - 26 * fall, y - 3, x + 8 + 26 * fall, y + 3, (0, 0, 0, round(70 + 110 * fall)))
                 y += effect.drop * (1 - fall * fall)
             draw_sheet(self.attack_fx[effect.sheet], effect.age, x, y, effect.facing, effect.scale)
+        if world.skill_unlock_time > 0:
+            # 간수의 방에 처음 들어오면 능력 획득 알림판이 화면 위쪽에 미끄러져 들어온다.
+            draw_sheet(self.attack_fx['skill-unlock'], SKILL_UNLOCK_SECONDS - world.skill_unlock_time,
+                       WIDTH / 2, HEIGHT - 190, 1, 2)
         if world.level_up_time > 0:
             # 레벨 업: 발밑에서 금빛 기둥이 솟고 LEVEL UP! 글자가 뜬다. pixelfx 인형 기준이라 2배로 그린다.
             player = world.player
@@ -1147,6 +1151,7 @@ class View:
         attack = None
         if world.attack_flash > 0:
             attack = (world.attack_kind, 1 - world.attack_flash / world.attack_duration)
+        self._draw_dash_trail(world.player)
         self.hero_sprite.draw(player, floor, world.weapon_index, player_alpha, world.time, attack)
         player_attack.draw_attack_effect(
             self.attack_fx, world.attack_kind, world.attack_age, world.attack_duration,
@@ -1172,6 +1177,7 @@ class View:
         actor = self._screen_actor(actor)
         pixel = self.current_world is not None and self.current_world.index == 0
         if monster_kind is None:   # 기본 분신은 모든 스테이지에서 PixelLab 주인공의 은빛 시트
+            self._draw_dash_trail(world_actor)
             self.hero_sprite.draw(actor, self._actor_floor_y(actor) + actor.jump_height,
                                   2, opacity, self.animation_time, echo=True)
             return
@@ -1248,6 +1254,20 @@ class View:
         draw_region(image, region, actor.x - draw_width / 2, floor_y, draw_width, size,
                     flip=actor.facing != -1)
         canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+
+    def _draw_dash_trail(self, actor):
+        """대시 잔상: 지나온 길에 은빛 분신 그림이 4개 남았다가 뒤쪽부터 흐려진다 (잔향)."""
+        age = actor.dash_age
+        if age >= DASH_TIME + 0.25 or (actor.dash_to, actor.dash_to_h) == (actor.dash_from, actor.dash_from_h):
+            return
+        ghost = self._screen_actor(actor)
+        floor = self._actor_floor_y(actor)
+        fade = 1 - max(0.0, age - DASH_TIME) / 0.25
+        for k in range(4):   # 대각선·위 대시는 높이도 따라 남는다
+            ghost.x = actor.dash_from + (actor.dash_to - actor.dash_from) * k / 4 - self.camera_x
+            height = actor.dash_from_h + (actor.dash_to_h - actor.dash_from_h) * k / 4
+            self.hero_sprite.draw(ghost, floor + height, 2, round(150 * fade * (k + 1) / 4),
+                                  self.animation_time, echo=True)
 
     def _screen_actor(self, actor):
         screen_actor = copy(actor)

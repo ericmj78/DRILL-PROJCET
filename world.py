@@ -55,6 +55,14 @@ POTION_CHARGE = 1.0        # 이만큼 모으면 가장 세게 던진다 (초)
 POTION_HAND = 40           # 발밑에서 손까지
 PORTAL_RANGE = 16          # 포털 가운데에서 이만큼 안에 서면 들어간다
 LEVEL_UP_SECONDS = 3.2     # 레벨이 오르면 본체 둘레에 레벨 업 이펙트(pixelfx ui/level-up)가 이만큼 보인다
+# 대시(같은 방향키 두 번 연타)와 2단 점프(공중에서 Space): 2스테이지 간수의 방부터 쓴다.
+# 1스테이지·2스테이지 점프맵에서는 못 쓴다. 공중에서는 1단 점프 중 한 번, 2단 점프 뒤 한 번 대시할 수 있다.
+# 대시는 ←→ 옆, ↑ 위, ↑와 ←→를 함께 누르면 대각선 위로 간다. 위로 가는 대시는 공중 대시 한 번으로 친다.
+NO_MOVES_SECTIONS = (0, 1)
+DASH_SPEED = 900           # px/s. 한 번에 약 145px
+DASH_TIME = 0.16           # 대시하는 동안은 맞지 않는다
+DASH_COOLDOWN = 0.55
+SKILL_UNLOCK_SECONDS = 2.4  # 처음 쓸 수 있게 된 구역에서 능력 획득 알림판(pixelfx ui/achievement)이 보이는 시간
 
 
 def potion_launch(actor) -> list:
@@ -101,6 +109,17 @@ class Actor:
     fall_speed: float = 0.0
     radar: bool = False           # 외눈 유령 분신의 레이더 (F)
     potion_charge: float = 0.0    # 물약 슬라임 분신이 F로 모은 시간
+    dash_time: float = 0.0        # 남은 대시 시간
+    dash_cooldown: float = 0.0
+    dash_age: float = 9.0         # 대시를 시작한 뒤 흐른 시간 (화면의 잔상용)
+    dash_from: float = 0.0        # 대시를 시작한 x와 끝난 x (잔상이 이 사이에 남는다)
+    dash_to: float = 0.0
+    dash_from_h: float = 0.0      # 대시를 시작한 높이와 끝난 높이
+    dash_to_h: float = 0.0
+    dash_vx: float = 0.0          # 대시 방향 (대각선이면 0.71씩)
+    dash_vy: float = 0.0
+    air_jumped: bool = False      # 공중에서 2단 점프를 이미 썼다
+    air_dashed: bool = False      # 공중에서 대시를 이미 썼다
 
     @property
     def elevator_offset(self):
@@ -134,6 +153,8 @@ class Motion:
     web_aiming: bool = False
     aim_x: int | None = None   # 녹화된 발사 방향 (-1, 0, 1). 재현은 조준 없이 이 방향으로 쏜다.
     release: bool = False      # D: 거미줄을 그 자리에서 놓는다
+    dash: bool = False         # 같은 방향키 두 번 연타: 대시. 방향은 누르고 있는 ←→와
+    dash_up: bool = False      # ↑ (↑만이면 곧장 위, ←→와 함께면 대각선 위)
 
 
 @dataclass
@@ -241,6 +262,8 @@ class World:
         self.shake = 0.0        # 화면을 흔드는 남은 시간
         self.confused = 0.0     # 낙석에 맞아 기절한 남은 시간. 머리 위에 혼란(pixelfx status/confused)이 돈다
         self.level_up_time = 0.0  # 레벨 업 이펙트가 남은 시간
+        self.moves = index not in NO_MOVES_SECTIONS   # 대시·2단 점프를 쓸 수 있는가
+        self.skill_unlock_time = SKILL_UNLOCK_SECONDS if index == 2 else 0.0
         self.time = 0.0
         self.result = 'playing'
         self.message = ''
@@ -256,6 +279,9 @@ class World:
         bridge = self.stage.bridge
         self.bridge_tiles = [0.0] * (-(-(bridge.right - bridge.left) // bridge.tile)) if bridge else []
         self._update_doors(0)
+        if self.skill_unlock_time:
+            self.notify('새 능력! ←→ 두 번 연타로 대시, 공중에서 Space로 2단 점프')
+            self.message_time = SKILL_UNLOCK_SECONDS + 1.5
 
     @property
     def level(self) -> int:
@@ -430,6 +456,7 @@ class World:
         self.shake = max(0, self.shake - STEP)
         self.confused = max(0, self.confused - STEP)
         self.level_up_time = max(0, self.level_up_time - STEP)
+        self.skill_unlock_time = max(0, self.skill_unlock_time - STEP)
         for text in self.damage_texts:
             text[2] += STEP
         self.damage_texts = [text for text in self.damage_texts if text[2] < 0.8]
@@ -819,7 +846,10 @@ class World:
 
     def _settle(self, actor: Actor, before: float):
         """발판 착지와 낙하. 점프가 내려오다 발판 높이를 지나면 그 위에 선다."""
-        if (not self.stage.pits and not self.stage.platforms and not self.stage.sky) or actor.elevator_target is not None \
+        # 발판 없는 방이라도 2단 점프로 공중에 떠 있으면(base > 0) 바닥까지 떨어뜨린다.
+        if (not self.stage.pits and not self.stage.platforms and not self.stage.sky
+                and actor.base == 0 and not actor.fall_speed) or actor.elevator_target is not None \
+                or (actor.dash_time > 0 and actor.dash_vy > 0) \
                 or actor.web_time > 0 or actor.door_climb_time > 0:
             return
         if actor.jump_time > 0:
@@ -1207,7 +1237,20 @@ class World:
             # 땅에 있을 때의 사다리와 승강기는 기존 방식으로 처리한다.
         if motion.horizontal:
             actor.facing = motion.horizontal
-        if (motion.jump and actor.jump_time == 0 and actor.fall_speed == 0
+        moves = self.moves and monster_kind is None   # 본체와 기본 분신만 (녹화하면 분신도 따라 한다)
+        if moves:
+            self._dash(actor, motion)
+        rising = actor.dash_time > 0 and actor.dash_vy > 0   # 위로 대시하는 중 (공중이다)
+        if (moves and motion.jump and not actor.air_jumped and not motion.stairs
+                and (actor.jump_time > 0 or actor.fall_speed > 0 or rising)):
+            # 2단 점프: 지금 높이에서 보통 점프를 한 번 더 한다. 발밑에서 깃털이 터진다.
+            actor.base, actor.fall_speed = actor.jump_height, 0.0
+            actor.jump_duration, actor.jump_peak, actor.jump_time = JUMP_DURATION, JUMP_HEIGHT, STEP
+            actor.air_jumped = True
+            actor.air_dashed, actor.dash_cooldown = False, 0.0   # 2단 점프 뒤 바로 대시를 한 번 더 쓸 수 있다
+            self.boss_effects.append(boss_skills.Effect('feather-burst', actor.x, actor.floor, lift=actor.base,
+                                                        scale=0.55, life=3.0))
+        elif (motion.jump and actor.jump_time == 0 and actor.fall_speed == 0 and not rising
                 and not motion.stairs and monster_kind != 'beast'):
             actor.jump_duration = JUMP_DURATION
             actor.jump_peak = JUMP_HEIGHT
@@ -1231,6 +1274,37 @@ class World:
                     actor.x = stair.x
                     actor.floor += motion.stairs
                     return
+    def _dash(self, actor: Actor, motion: Motion):
+        """방향키 두 번 연타로 그쪽으로 짧게 돌진한다. 공중에서는 점프 한 번에 한 번. 출발점에 먼지가 튄다."""
+        airborne = (actor.jump_time > 0 or actor.fall_speed > 0 or actor.dash_time > 0
+                    or actor.base not in self._ground_heights(actor))
+        if not airborne:
+            actor.air_jumped = actor.air_dashed = False
+        actor.dash_cooldown = max(0.0, actor.dash_cooldown - STEP)
+        actor.dash_age += STEP
+        if motion.dash and actor.dash_cooldown == 0 and not actor.air_dashed and not motion.stairs:
+            vx = motion.horizontal or (0 if motion.dash_up else actor.facing)
+            vy = 1 if motion.dash_up else 0
+            scale = 0.7071 if vx and vy else 1.0
+            actor.dash_vx, actor.dash_vy = vx * scale, vy * scale
+            if vx:
+                actor.facing = vx
+            height = actor.jump_height
+            if vy:   # 위로 솟구칠 때는 점프 포물선을 끊고 지금 높이에서 곧장 올라간다 (끝나면 떨어진다)
+                actor.base, actor.jump_time, actor.fall_speed = height, 0.0, 0.0
+            actor.dash_time, actor.dash_cooldown, actor.dash_age = DASH_TIME, DASH_COOLDOWN, 0.0
+            actor.dash_from = actor.dash_to = actor.x
+            actor.dash_from_h = actor.dash_to_h = height
+            actor.air_dashed = airborne or bool(vy)
+            if not airborne:   # 땅을 박차고 나갈 때만 먼지가 튄다
+                self.boss_effects.append(boss_skills.Effect('heavy-landing', actor.x, actor.floor, -actor.facing,
+                                                            scale=0.45, lift=actor.base, life=1.0))
+        if actor.dash_time > 0:
+            actor.dash_time = max(0.0, actor.dash_time - STEP)
+            self._move_x(actor, actor.dash_vx * DASH_SPEED * STEP)
+            actor.base += actor.dash_vy * DASH_SPEED * STEP
+            actor.dash_to, actor.dash_to_h = actor.x, actor.jump_height
+
     @staticmethod
     def _near(actor: Actor, point: Point, distance: float) -> bool:
         return (actor.elevator_target is None and actor.jump_time == 0 and actor.web_time == 0 and actor.door_climb_time == 0
@@ -1539,7 +1613,7 @@ class World:
 
     def hurt(self, amount: int, message: str) -> bool:
         """본체가 피해를 한 번 입는다. 무적 시간 중이면 False."""
-        if self.invulnerable > 0:
+        if self.invulnerable > 0 or self.player.dash_time > 0:
             return False
         self.health = max(0, self.health - amount)
         self.invulnerable = 0.92
