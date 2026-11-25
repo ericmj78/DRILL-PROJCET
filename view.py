@@ -26,7 +26,7 @@ from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
 from stages import PLATE_RANGE, Point
-from world import JUMP_DURATION, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
+from world import JUMP_DURATION, LEVEL_UP_SECONDS, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
 
 
 WIDTH, HEIGHT = 1120, 720
@@ -109,6 +109,7 @@ MONSTER_NAMES = {
 # 안쪽 영역은 (left, top, right, bottom), 조각은 (x, y, width, height)이다.
 HUD_HP_INNER = (405, 246, 1146, 299)  # 그려진 "HP 3 / 3" 글자와 양 끝의 빨간 부분까지 덮는다.
 HUD_HP_FILL = (420, 248, 240, 47)    # 빨간 천 질감. 가운데의 글자를 피해 왼쪽만 쓴다.
+HP_HOLD, HP_DRAIN = 0.45, 0.4         # 깎인 체력 칸이 남아 있는 시간, 줄어드는 시간 (초)
 HUD_XP_INNER = (409, 331, 1110, 346)
 HUD_XP_FILL = (420, 331, 300, 15)    # 금색 경험치 질감
 HUD_EMPTY = (760, 331, 340, 15)      # 경험치 막대 오른쪽의 빈 홈. 체력 막대의 빈 칸에도 쓴다.
@@ -144,6 +145,8 @@ class View:
         self.last_floor = None
         self.floor_transition_at = 0.0
         self.camera_lift = 0.0   # 통합방에서 화면을 위로 올린 거리 (층별 화면 자르기에도 쓴다)
+        # 체력바 피해 연출: 깎인 칸이 하얗게 번쩍이고 잠시 남았다가 줄어든다 (pixelfx ui/health-bar-hit 흉내)
+        self.hp_seen, self.hp_from, self.hp_hit_at = None, 0, -9.0
         self.shake_base = None
         self.stage_started_at = 0.0
         self.background = load_asset('dungeon.png')
@@ -1109,6 +1112,18 @@ class View:
                 box(x - 8 - 26 * fall, y - 3, x + 8 + 26 * fall, y + 3, (0, 0, 0, round(70 + 110 * fall)))
                 y += effect.drop * (1 - fall * fall)
             draw_sheet(self.attack_fx[effect.sheet], effect.age, x, y, effect.facing, effect.scale)
+        if world.level_up_time > 0:
+            # 레벨 업: 발밑에서 금빛 기둥이 솟고 LEVEL UP! 글자가 뜬다. pixelfx 인형 기준이라 2배로 그린다.
+            player = world.player
+            draw_sheet(self.attack_fx['level-up'], LEVEL_UP_SECONDS - world.level_up_time,
+                       player.x - self.camera_x, self._actor_floor_y(player) + player.jump_height, 1, 2)
+        if world.confused > 0:
+            # 낙석에 맞은 본체 머리 위에서 소용돌이와 물음표가 돈다. 끝날 때 흐려진다.
+            # pixelfx 인형(키 약 44)에 맞춘 그림이라 주인공(약 92)에 맞게 2배로 그리고 머리 위로 올린다.
+            player = world.player
+            draw_sheet(self.attack_fx['confused'], world.time, player.x - self.camera_x,
+                       self._actor_floor_y(player) + player.jump_height + 52, 1, 2,   # YOU 표시 위
+                       alpha=round(255 * min(1, world.confused / 0.3)))
 
         field = world.gravity_field
         if field is not None:
@@ -1304,10 +1319,19 @@ class View:
         draw_region(self.hud_concept, (390, 319, 750, 48), 108, 648, 210, 17)
         health, top = world.health, world.max_health
         health_ratio = max(0.0, min(1.0, health / top if top else 0.0))
+        now = perf_counter()
+        if self.hp_seen is not None and health < self.hp_seen:
+            self.hp_from = max(self.hp_from if now - self.hp_hit_at < HP_HOLD + HP_DRAIN else 0, self.hp_seen)
+            self.hp_hit_at = now
+        self.hp_seen = health
+        age = now - self.hp_hit_at
+        lost = self.hp_from + (health - self.hp_from) * min(1.0, max(0.0, (age - HP_HOLD) / HP_DRAIN))
+        jolt = round(4 * sin(age * 70) * (1 - age / 0.25)) if age < 0.25 else 0   # 맞은 순간 막대가 흔들린다
         # 체력이 30% 아래면 빨간 막대가 깜빡인다.
-        danger = health < top * 0.3 and int(perf_counter() * 4) % 2
-        self._fill_bar((380, 210, 850, 110), (105, 668, 220, 30), HUD_HP_INNER,
-                       HUD_HP_FILL, health_ratio, 120 if danger else 255)
+        danger = health < top * 0.3 and int(now * 4) % 2
+        self._fill_bar((380, 210, 850, 110), (105 + jolt, 668, 220, 30), HUD_HP_INNER,
+                       HUD_HP_FILL, health_ratio, 120 if danger else 255, lost=lost / top if top else 0,
+                       flash=age < 0.12)
         label = f'HP  {health} / {top}'
         self.small.draw(213 - text_width(self.small, label) / 2, 682, label, WHITE)
         self.small.draw(110, 708, f'Lv.{world.level}', GOLD)
@@ -1386,7 +1410,7 @@ class View:
         self.small.draw(left + width / 2 - text_width(self.small, label) / 2,
                         y + bar_height * scale / 2, label, WHITE)
 
-    def _fill_bar(self, frame, target, inner, fill, ratio, alpha=255):
+    def _fill_bar(self, frame, target, inner, fill, ratio, alpha=255, lost=0.0, flash=False):
         """HUD 이미지의 막대 안쪽을 빈 홈 픽셀로 덮고, 채움 픽셀을 ratio만큼 이어 붙인다.
 
         frame은 원본에서 잘라 target(left, bottom, width, height)에 그린 영역이다.
@@ -1398,6 +1422,9 @@ class View:
         y = target[1] + (frame[1] + frame[3] - bottom) * scale_y
         width, height = (right - left) * scale_x, (bottom - top) * scale_y
         self._tile_hud(HUD_EMPTY, x, y, width, height, scale_x)
+        if lost > ratio:   # 방금 깎인 칸: 처음엔 하얗게, 그다음 연한 빨강으로 남았다가 줄어든다 (흰 글자가 보이게)
+            box(x + width * ratio, y + 1, x + width * min(1.0, lost), y + height - 1,
+                WHITE if flash else (226, 118, 108))
         if ratio > 0:
             self._tile_hud(fill, x, y, width * ratio, height, scale_x, alpha)
 

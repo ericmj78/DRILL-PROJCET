@@ -54,6 +54,7 @@ POTION_GRAVITY = 900
 POTION_CHARGE = 1.0        # 이만큼 모으면 가장 세게 던진다 (초)
 POTION_HAND = 40           # 발밑에서 손까지
 PORTAL_RANGE = 16          # 포털 가운데에서 이만큼 안에 서면 들어간다
+LEVEL_UP_SECONDS = 3.2     # 레벨이 오르면 본체 둘레에 레벨 업 이펙트(pixelfx ui/level-up)가 이만큼 보인다
 
 
 def potion_launch(actor) -> list:
@@ -238,6 +239,8 @@ class World:
         self.boss_effects = []  # 보스 스킬 이펙트 (boss_skills.Effect)
         self.gravity_field = None
         self.shake = 0.0        # 화면을 흔드는 남은 시간
+        self.confused = 0.0     # 낙석에 맞아 기절한 남은 시간. 머리 위에 혼란(pixelfx status/confused)이 돈다
+        self.level_up_time = 0.0  # 레벨 업 이펙트가 남은 시간
         self.time = 0.0
         self.result = 'playing'
         self.message = ''
@@ -310,6 +313,9 @@ class World:
 
     def toggle_recording(self):
         if self.result != 'playing':
+            return
+        if self.recording is None and self.confused > 0:
+            self.notify('기절해서 움직일 수 없습니다!')
             return
         if self.recording is None and self.player.elevator_target is not None:
             self.notify('승강기가 멈춘 뒤 분신 녹화를 시작하세요.')
@@ -422,6 +428,8 @@ class World:
         self.attack_flash = max(0, self.attack_flash - STEP)
         self.attack_age += STEP
         self.shake = max(0, self.shake - STEP)
+        self.confused = max(0, self.confused - STEP)
+        self.level_up_time = max(0, self.level_up_time - STEP)
         for text in self.damage_texts:
             text[2] += STEP
         self.damage_texts = [text for text in self.damage_texts if text[2] < 0.8]
@@ -433,7 +441,8 @@ class World:
             self._apply_attack()
         player_x, player_floor = self.player.x, self.player.floor
         if recording is None and not (self.gravity_field and self.gravity_field.captured):
-            self._move(self.player, motion)
+            # 낙석에 맞아 기절한 동안은 입력을 받지 않는다 (하던 점프·낙하는 이어진다).
+            self._move(self.player, Motion() if self.confused > 0 else motion)
             self._block_body(player_x, player_floor)
         elif recording is not None:
             self.player.moving = False
@@ -458,7 +467,7 @@ class World:
                           '숨겨진 함정입니다! 분신 곁에서 위치를 보고 뛰어넘으세요.')
                 if self.result != 'playing':
                     return
-        if recording is None and attack and self.attack_cooldown == 0:
+        if recording is None and attack and self.attack_cooldown == 0 and self.confused == 0:
             self._attack(attack if isinstance(attack, str) else 'slash')
 
         if self.echo is not None:
@@ -1404,6 +1413,7 @@ class World:
         self.xp += sum(ENEMY_KINDS[enemy.spawn.kind].xp for enemy in self.enemies if enemy.health == 0)
         if self.level > level:
             self.health = self.max_health
+            self.level_up_time = LEVEL_UP_SECONDS
             self.notify(f'레벨 {self.level}! 체력을 모두 회복했습니다.')
         defeated = [enemy for enemy in self.enemies if enemy.health == 0 and enemy.spawn.kind not in BOSS_KINDS]
         for enemy in defeated:

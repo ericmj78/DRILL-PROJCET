@@ -81,6 +81,7 @@ SKILLS = {
 CHARGE_SPEED = 520
 CHAIN_REACH = 190  # 쇠사슬이 닿는 앞쪽 거리
 ROCK_FALL = 0.9    # 바위가 떨어지는 데 걸리는 시간
+CONFUSED_SECONDS = 1.2   # 낙석에 맞으면 이만큼 기절해 움직이지도 공격하지도 못한다
 
 
 def current(enemy) -> Skill | None:
@@ -150,6 +151,9 @@ def update(world, enemy) -> bool:
     elif skill.name == 'chain' and fired:
         player = world.player
         world.shake = max(world.shake, 0.15)
+        # 사슬이 내려친 바닥에서 녹슨 쇠 가시가 솟는다. pixelfx ice/ice-spikes를 녹·불씨 색, reach 136으로 뽑아
+        # 1.4배로 그리면 길이가 CHAIN_REACH(190)와 같다.
+        effects.append(Effect('chain-spikes', actor.x + actor.facing * 10, actor.floor, actor.facing, scale=1.4))
         if player.floor == actor.floor and 0 < (player.x - actor.x) * actor.facing < CHAIN_REACH:
             world.hurt(skill.damage, '간수의 쇠사슬에 맞았습니다.')
         for echo in world.echo_actors():
@@ -235,7 +239,9 @@ def update_effects(world):
         reach = effect.radius + effect.grow * (effect.age - effect.hit_at)
         dodged = effect.jumpable and player.jump_height > 30
         if player.floor == effect.floor and abs(player.x - effect.x) <= reach and not dodged:
-            world.hurt(effect.damage, '보스의 스킬에 맞았습니다. 예고를 보고 피하세요.')
+            if world.hurt(effect.damage, '보스의 스킬에 맞았습니다. 예고를 보고 피하세요.') and effect.sheet == 'dirt-explosion':
+                world.confused = CONFUSED_SECONDS   # 떨어진 바위에 머리를 맞아 잠시 기절한다
+                world.notify('낙석에 맞아 기절했습니다!')
         for echo in world.echo_actors():
             if (echo.floor == effect.floor and abs(echo.x - effect.x) <= reach
                     and not (effect.jumpable and echo.jump_height > 30)):

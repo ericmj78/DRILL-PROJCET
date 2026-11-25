@@ -72,5 +72,8 @@
   "attack_fx/dirt-explosion.png": "attack_fx/흙_폭발.png",
   "attack_fx/ground-slam.png": "attack_fx/땅_내려치기.png",
   "attack_fx/rock.png": "attack_fx/바위.png",
-  "attack_fx/portal.png": "attack_fx/민트_포탈.png"
+  "attack_fx/portal.png": "attack_fx/민트_포탈.png",
+  "attack_fx/chain-spikes.png": "attack_fx/쇠사슬_가시.png",
+  "attack_fx/confused.png": "attack_fx/혼란.png",
+  "attack_fx/level-up.png": "attack_fx/레벨업.png"
 }
