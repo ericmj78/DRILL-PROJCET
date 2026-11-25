@@ -9,7 +9,7 @@ import sys
 
 import boss_skills
 from stages import BOSS_KINDS, LEFT, MOVE_SPEED, RIGHT, SKY_STEP, STAGES, STEP
-from world import JUMP_DURATION, SKY_PIN, Actor, Echo, Motion, World
+from world import JUMP_DURATION, JUMP_HEIGHT, SKY_PIN, Actor, Echo, Motion, World
 
 
 class Bot:
@@ -21,10 +21,10 @@ class Bot:
     def me(self):  # 지금 조작 중인 대상
         return self.w.recording.preview if self.w.recording else self.w.player
 
-    def tick(self, horizontal=0, stairs=0, jump=False, attack=False, web=False, held=False):
+    def tick(self, horizontal=0, stairs=0, jump=False, attack=False, web=False, held=False, dash=False):
         while self.w.pending_monster_echo:
             self.w.resolve_monster_echo()
-        self.w.step(Motion(horizontal, stairs, jump, web, held), attack)
+        self.w.step(Motion(horizontal, stairs, jump, web, held, dash=dash), attack)
         self.frames += 1
 
     def super_jump(self, target_x):
@@ -719,6 +719,77 @@ def check_late_stage_monsters():
 
 def check_puzzles():
     """기획서 그림대로 바꾼 장치가 분신 없이는 통과되지 않는지 확인한다."""
+    # 대시·2단 점프: 1스테이지와 2스테이지 점프맵에서는 못 쓰고, 간수의 방부터 쓴다.
+    for index in (0, 1):
+        w = World(index)
+        w.enemies = []
+        x = w.player.x
+        w.step(Motion(dash=True))
+        assert w.player.x - x < 10, ('대시를 쓸 수 없는 구역에서 대시했습니다', index)
+    w = World(2)
+    w.enemies = []
+    x = w.player.x
+    w.step(Motion(dash=True))
+    assert not w.hurt(5, '대시'), '대시하는 동안 맞았습니다'
+    for _ in range(20):
+        w.step(Motion())
+    assert 120 < w.player.x - x < 170, ('대시 거리', w.player.x - x)
+    top = 0
+    for frame in range(90):
+        w.step(Motion(jump=frame in (0, 15)))
+        top = max(top, w.player.jump_height)
+    landed = w.player.jump_time == 0 and not w.player.fall_speed   # 바닥이나 발판(높이 45)에 내려섰다
+    assert top > JUMP_HEIGHT + 20 and landed, ('2단 점프', top, w.player)
+    # 점프 → 대시 → 2단 점프 → 대시: 공중에서는 점프 한 번에 대시 한 번
+    w = World(2)
+    w.enemies = []
+    w.player.x = 1000
+    dashes = 0
+    for frame in range(60):
+        before = w.player.dash_time
+        w.step(Motion(1, jump=frame in (0, 18), dash=frame in (4, 10, 22)))
+        dashes += w.player.dash_time > before
+    assert dashes == 2, ('공중 대시는 1단·2단 점프에 한 번씩입니다', dashes)
+    # 간수의 방 발판: 보통 점프로는 못 오르고 2단 점프로 80→160, 가운데 130은 점프 + 위 대시로 오른다.
+    def climb(x, base, jumps, dash_at=None):
+        w = World(2)
+        w.enemies = []
+        w.player.x, w.player.base = x, base
+        for frame in range(90):
+            w.step(Motion(jump=frame in jumps, dash=frame == dash_at, dash_up=frame == dash_at))
+        return w.player.base
+    assert (climb(330, 0, (0,)), climb(330, 0, (0, 18)), climb(410, 80, (0, 18))) == (0, 80, 160), '간수의 방 양옆 발판'
+    assert (climb(970, 0, (0, 18)), climb(970, 0, (0,), dash_at=10)) == (0, 130), '간수의 방 가운데 발판'
+    # 위 대시는 약 145 솟구쳤다가 떨어지고, 대각선 위 대시는 옆·위로 약 100씩 간다.
+    # 솟구치는 동안 Space는 1단 점프가 아니라 2단 점프로 친다 (공중 점프를 공짜로 얻지 못한다).
+    for horizontal, up, side in ((0, 140, (-5, 5)), (1, 95, (90, 115))):
+        w = World(2)
+        w.enemies = []
+        w.player.x = 1000
+        top, jumps = 0, 0
+        for frame in range(90):
+            w.step(Motion(horizontal if frame == 0 else 0, jump=frame in (5, 7), dash=frame == 0,
+                          dash_up=frame == 0))
+            top = max(top, w.player.dash_to_h)
+            jumps += frame in (5, 7) and w.player.jump_time == STEP
+        assert top > up and side[0] < w.player.dash_to - w.player.dash_from < side[1], ('위·대각선 대시', top, w.player)
+        assert jumps == 1 and w.player.jump_time == 0 and not w.player.fall_speed, ('위 대시 뒤 착지', jumps, w.player)
+
+    # 간수의 낙석: 맞으면 잠시 기절해 걷기·점프·공격이 안 되고, 기절이 풀리면 다시 움직인다.
+    w = World(2)
+    w.warp_to_boss()
+    w.enemies = []
+    w.boss_effects.append(boss_skills.Effect('dirt-explosion', w.player.x, w.player.floor, hit_at=0.0,
+                                             hit_for=0.10, radius=38, damage=5))
+    w.step(Motion())
+    start = w.player.x
+    for _ in range(30):
+        w.step(Motion(1, jump=True), 'slash')
+    assert w.confused > 0 and w.player.x == start and w.player.jump_time == 0, '낙석에 맞고도 움직였습니다'
+    for _ in range(round(boss_skills.CONFUSED_SECONDS / STEP)):
+        w.step(Motion(1))
+    assert w.player.x > start, '기절이 풀리지 않았습니다'
+
     # 마녀의 실험 금고: 금고 결계에 닿은 물약은 깨지고, 독 수조 위 땅 A는 염력으로 잡히지 않는다.
     w = World(9)
     w.enemies = []

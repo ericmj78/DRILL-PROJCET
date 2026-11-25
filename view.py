@@ -170,6 +170,9 @@ class View:
         # 하늘 섬 날갯짓 (PixelLab, tools/monster_pixel/pixellab_sky_island.py): 가로 8칸, 한 칸 176 × 80, 돌 윗면 35줄
         self.sky_island_art = load_asset('PixelLab/스테이지/sky_island.png')
         sdl2.SDL_SetTextureScaleMode(self.sky_island_art.texture, sdl2.SDL_ScaleModeNearest)
+        # 대마녀의 방 하늘 섬 (tools/monster_pixel/pixellab_witch_island.py): 가로 8칸, 한 칸 224 × 96, 돌 윗면 35줄
+        self.witch_island_art = load_asset('PixelLab/스테이지/witch_island.png')
+        sdl2.SDL_SetTextureScaleMode(self.witch_island_art.texture, sdl2.SDL_ScaleModeNearest)
         self.late_three_floor_art = load_asset('map_sections/echo-knight-approach-three-floors-concept.png')
         self.late_arcane_castle = load_asset('map_sections/late_arcane_castle.png')
         self.late_arcane_arena = load_asset('map_sections/late_arcane_arena.png')
@@ -189,6 +192,8 @@ class View:
         )
         for background in self.beast_jump_backgrounds:
             sdl2.SDL_SetTextureScaleMode(background.texture, sdl2.SDL_ScaleModeLinear)
+        self.boss_platform_art = load_asset('PixelLab/스테이지/boss_platform.png')
+        sdl2.SDL_SetTextureScaleMode(self.boss_platform_art.texture, sdl2.SDL_ScaleModeNearest)
         self.boss_tall_arenas = {
             2: load_asset('map_sections/jailer_double_height_concept.png'),
             5: load_asset('map_sections/witch_double_height_concept.png'),
@@ -556,7 +561,9 @@ class View:
         for index, (bx, height) in enumerate(world.sky_blocks):
             x, y = bx - self.camera_x, floor_y + height
             frame = int(time * 9 + index * 3) % 8   # 섬마다 날갯짓 박자를 어긋나게
-            draw_region(self.sky_island_art, (frame * 176, 0, 176, 80), x - 88, y - 45, 176, 80)
+            art, width, height = ((self.witch_island_art, 224, 96) if world.index == 5
+                                  else (self.sky_island_art, 176, 80))
+            draw_region(art, (frame * width, 0, width, height), x - width / 2, y - (height - 35), width, height)   # 돌 윗면 35줄
             if index == world.sky_hold:
                 box(x - half - 3, y - 33, x + half + 3, y + 3, CYAN, filled=False)
             elif book is not None and hypot(bx - book.x, height - book.jump_height - 30) <= sky.reach:
@@ -876,6 +883,10 @@ class View:
                 continue
             y = self.floor_y[platform.floor] + platform.height
             left, right = (edge - self.camera_x for edge in world.platform_span(index))
+            if world.index in BOSS_ROOMS:   # 보스방: 공중 돌 발판 그림 (윗면이 발판 높이)
+                art = self.boss_platform_art
+                draw_region(art, (0, 0, art.w, art.h), (left + right - art.w) / 2, y - art.h, art.w, art.h)
+                continue
             # 숨은 발판은 보라색, 늘 보이는 점프맵 발판은 돌색
             fill, edge = ((124, 82, 178), (214, 176, 255)) if platform.hidden else ((88, 92, 112), (150, 156, 178))
             box(left, y - 10, right, y, fill)

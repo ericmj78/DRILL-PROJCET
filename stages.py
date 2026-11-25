@@ -333,8 +333,13 @@ STAGES = (
         # 층 없는 한 화면 보스방. (예전 5층 탑의 1~4층 퍼즐은 뺐다)
         1, Point(112, 0), Point(2100, 0),
         floor_height=800,
-        platforms=(Platform(0, 350, 510, 38, False), Platform(0, 525, 685, 76, False),
-                   Platform(0, 1510, 1670, 38, False), Platform(0, 1335, 1495, 76, False)),
+        # 공중 돌 발판(그림 assets/PixelLab/스테이지/boss_platform.png, 윗면 폭 196): 스케치대로 왼쪽 2단, 가운데, 오른쪽 2단.
+        # 대시·2단 점프를 얻는 방이라 발판을 높였다: 양옆은 낮은 단 80·높은 단 160이라 보통 점프(48)로는 못 오르고
+        # 2단 점프(약 94)로 한 단씩 오른다. 가운데(130)는 점프 + 위 대시(↑↑)로 오른다.
+        # 발판 위(높이 30 이상)에서는 돌진을 피한다.
+        platforms=(Platform(0, 230, 426, 80, False), Platform(0, 395, 591, 160, False),
+                   Platform(0, 871, 1067, 130, False),
+                   Platform(0, 1330, 1526, 80, False), Platform(0, 1500, 1696, 160, False)),
         enemies=(EnemySpawn('jailer_boss', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
@@ -382,8 +387,12 @@ STAGES = (
         # 층 없는 한 화면 보스방. (예전 5층 탑의 1~4층과 균형 승강기는 뺐다)
         1, Point(111, 0), Point(2100, 0),
         floor_height=800,
-        platforms=(Platform(0, 350, 510, 38, False), Platform(0, 525, 685, 76, False),
-                   Platform(0, 1510, 1670, 38, False), Platform(0, 1335, 1495, 76, False)),
+        # 날개 달린 하늘 섬 7개(그림 assets/PixelLab/스테이지/witch_island.png, 윗면 폭 150)가 저마다 범위 안에서 떠다닌다.
+        # 높이 80·160·240 세 단이라 2단 점프(약 94)나 위 대시로 한 단씩 갈아타며 대마녀의 공격을 피한다.
+        # 윗단·아랫단 범위가 겹친다.
+        sky=SkyPuzzle(blocks=((425, 80), (1100, 80), (1775, 80), (600, 160), (1600, 160), (900, 240), (1350, 240)),
+                      switches=(), width=150,
+                      lanes=((250, 600), (850, 1350), (1600, 1950), (400, 800), (1400, 1800), (700, 1100), (1150, 1550))),
         enemies=(EnemySpawn('grand_witch', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
