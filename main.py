@@ -11,6 +11,7 @@ from pico2d import pico2d as canvas
 from stages import STAGE_GROUPS, STEP, next_section_in_stage, stage_group_index
 from title_menu import BossSelector, TitleMenu
 from view import HEIGHT, WIDTH, View
+from sound import MUSIC_SHARE, Audio
 from world import Motion, World
 
 DOUBLE_TAP = 0.25   # 같은 방향키를 이 시간(초) 안에 다시 누르면 대시
@@ -18,6 +19,10 @@ DOUBLE_TAP = 0.25   # 같은 방향키를 이 시간(초) 안에 다시 누르�
 
 def advance_stage_section(world):
     """Continue a merged stage while preserving the player's progress."""
+    if world.room_request is not None:   # 하늘 포털을 밟았다: 너머의 몬스터 방으로
+        return world.enter_room()
+    if world.parent is not None:         # 몬스터 방을 깼으면 열쇠를 들고 하늘 땅으로 돌아간다
+        return world.back_from_room() if world.result == 'cleared' else world
     following = next_section_in_stage(world.index) if world.result == 'cleared' else None
     if following is None:
         return world
@@ -42,6 +47,7 @@ def main():
         canvas.SDL_SetRenderDrawBlendMode(canvas.renderer, canvas.SDL_BLENDMODE_BLEND)
         view = View()
         world = World()
+        audio = Audio()
         screen = 'intro'
         menu = TitleMenu()
         pressed = set()
@@ -88,7 +94,7 @@ def main():
                     elif action == 'audio':
                         volume = 0 if menu.muted else round(menu.volume * 128 / 100)
                         canvas.Mix_Volume(-1, volume)
-                        canvas.Mix_VolumeMusic(volume)
+                        canvas.Mix_VolumeMusic(round(volume * MUSIC_SHARE))
                     elif action == 'fullscreen':
                         menu.fullscreen = not menu.fullscreen
                         canvas.SDL_SetWindowFullscreen(
@@ -211,6 +217,10 @@ def main():
                     menu.open('main')
                     pressed.clear()
                     continue
+                if key == canvas.SDLK_o:   # 시험 플레이용 무적 켜기/끄기
+                    World.god = not World.god
+                    world.notify('무적 켜짐 (O로 끄기)' if World.god else '무적 꺼짐')
+                    continue
                 if key == SDLK_b:
                     boss_selector = BossSelector()
                     pressed.clear()
@@ -320,6 +330,7 @@ def main():
                 view.draw_floor_selector(floor_entry, world.stage.floors)
             if boss_selector is not None:
                 view.draw_boss_selector(boss_selector)
+            audio.update(world, screen)
             update_canvas()
             delay(0.001)
     finally:

@@ -13,6 +13,7 @@ from pico2d import pico2d as canvas
 from animation import WalkCycle, draw_region
 from asset_paths import asset_path
 import boss_skills
+from boss_skills import FLASH_SECONDS
 import late_monster_motion
 from monster_attack import attack_pose, draw_attack_effect, draw_posed, draw_sheet, load_attack_fx, skill_pose
 import player_attack
@@ -20,19 +21,27 @@ from poison_fx import PoisonFx
 import pixel_sprites
 from pixel_sprites import PixelSprites
 from hero_sprite import HeroSprite
+import chain_snake
 import monster_sprite
 from monster_sprite import MonsterSprite
 from title_menu import CONTROLS, PAGE_TITLES
 from stages import LEFT
 from stages import BOSS_KINDS, ENEMY_KINDS, GATE_HALF_WIDTH, RIGHT, STAGES, STAGE_GROUPS, STAGE_TITLES, STEP, WEAPONS, stage_group_index
-from stages import PLATE_RANGE, Point
-from world import DASH_TIME, JUMP_DURATION, LEVEL_UP_SECONDS, SKILL_UNLOCK_SECONDS, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
+from stages import PLATE_RANGE, POISON_DEPTH, SKY_ROOMS, Point
+from world import ABSORB_SECONDS, DASH_TIME, LEVEL_UP_SECONDS, PULL_RANGE, ROPE_TOP, SKILL_UNLOCK_SECONDS, LIGHT_BELOW, POTION_GRAVITY, SPIDER_AIM_REACH, WATCH_RANGE, potion_launch
 
 
 WIDTH, HEIGHT = 1120, 720
 # 보스방(간수·대마녀)은 1/BOSS_ZOOM배 큰 그림판에 그린 뒤 BOSS_ZOOM배로 줄여 붙여, 방을 넓게 본다.
-BOSS_ROOMS, BOSS_ZOOM = (2, 5), 0.75
+BOSS_ROOMS, BOSS_ZOOM = (2, 5, *SKY_ROOMS), 0.75   # 하늘 포털 너머 방도 넓게 본다
+LAST_BOSS_ROOM = 8   # 마지막 잔향: 맨 위층만 보스방이라 그 층에서만 줄여 본다
 ZOOM_WIDTH, ZOOM_HEIGHT = round(WIDTH / BOSS_ZOOM), round(HEIGHT / BOSS_ZOOM)
+# 포털 너머 방 그림(1742 × 903)은 비율대로 맵 폭(WIDTH * 2)에 맞춘다. 발 디딜 줄은 그림 830줄이라 바닥 위로 1067이 그림이다.
+ROOM_FLOOR_ROW, ROOM_ABOVE = 830, round(WIDTH * 2 * 830 / 1742)
+PLAY_TOP = 625   # 맵이 보이는 위 끝 (그 위는 HUD). 보스방 줌에서는 PLAY_TOP / BOSS_ZOOM
+# 화면이 따라 올라가는 한계: 그림 꼭대기가 HUD 아래 끝에 닿을 때까지. 보스방 그림은 바닥 위 740까지다
+ROOM_LIFT = ROOM_ABOVE - (PLAY_TOP - 160) / BOSS_ZOOM
+BOSS_LIFT = 740 - (PLAY_TOP - 160) / BOSS_ZOOM
 PLAY_TOP, PLAY_HEIGHT = 95, 521   # 화면에서 맵이 보이는 칸 (위에서부터, 아래로 HUD 줄까지)
 # 물약 슬라임이 이만큼 움직일 때마다 자국을 남기고, 자국은 이만큼 뒤 사라진다 (마지막 40% 동안 흐려진다).
 # 슬라임이 느리고 몸에 가려지니 수명을 넉넉히 둔다.
@@ -60,7 +69,6 @@ PUZZLE_PROPS = {
     'sensor': (875, 260, 405, 165),
     'locked_gate': (1310, 0, 340, 425),
     'lever': (1646, 265, 100, 156),
-    'bridge': (20, 576, 420, 225),
     'hazard': (435, 608, 450, 222),
     'sync': (895, 470, 350, 360),
     'lift_platform': (1302, 681, 290, 100),
@@ -109,6 +117,10 @@ MONSTER_NAMES = {
 # 안쪽 영역은 (left, top, right, bottom), 조각은 (x, y, width, height)이다.
 HUD_HP_INNER = (405, 246, 1146, 299)  # 그려진 "HP 3 / 3" 글자와 양 끝의 빨간 부분까지 덮는다.
 HUD_HP_FILL = (420, 248, 240, 47)    # 빨간 천 질감. 가운데의 글자를 피해 왼쪽만 쓴다.
+FOG_SCALE = 2.5       # 잔향 기사 방 안개 한 칸(320 × 180)을 키우는 배율
+PORTAL_CENTER = 112   # 2배로 그린 출구 포털 그림에서 소용돌이 가운데의 높이
+# 눈부심을 줄이려고 보스 스킬 이펙트(빛 기둥·번개·폭발·광선)를 조금 어둡고 투명하게 그린다
+FX_ALPHA, FX_TINT = 185, (200, 200, 205)
 HP_HOLD, HP_DRAIN = 0.45, 0.4         # 깎인 체력 칸이 남아 있는 시간, 줄어드는 시간 (초)
 HUD_XP_INNER = (409, 331, 1110, 346)
 HUD_XP_FILL = (420, 331, 300, 15)    # 금색 경험치 질감
@@ -198,6 +210,12 @@ class View:
             2: load_asset('map_sections/jailer_double_height_concept.png'),
             5: load_asset('map_sections/witch_double_height_concept.png'),
         }
+        room_art = load_asset('층별맵/3스테이지_포털방_통합배경.png')
+        self.boss_tall_arenas.update(dict.fromkeys(SKY_ROOMS, room_art))
+        # 사슬 뱀의 탑: 돌 뱀 도트 조각 (PixelLab, tools/stage_art/chain_snake.py). 오른쪽을 보고 1배로 그린다.
+        self.snake_art = {name: load_asset(f'사슬뱀/{name}.png') for name in ('머리', '몸통', '꼬리')}
+        for image in self.snake_art.values():
+            sdl2.SDL_SetTextureScaleMode(image.texture, sdl2.SDL_ScaleModeNearest)
         self.wizard_fx = {}
         for name in ('rain', 'storm', 'potion'):
             data = json.loads((ASSETS / 'wizard_castle' / f'{name}.json').read_text(encoding='utf-8'))
@@ -208,6 +226,11 @@ class View:
         self.pixel_statue_art = load_asset('1스테이지_굵은도트_가고일.png')
         sdl2.SDL_SetTextureScaleMode(self.pixel_statue_art.texture, sdl2.SDL_ScaleModeNearest)
         self.statue_chain_art = load_asset('1스테이지_조각상_쇠사슬.png')
+        # 2스테이지 거미 둥지 구조물 (PixelLab, tools/stage_art/nest_art.py)
+        self.nest_art = {name: load_asset(f'PixelLab/스테이지/둥지/{name}.png')
+                         for name in ('턱', '거미알')}
+        for image in self.nest_art.values():
+            sdl2.SDL_SetTextureScaleMode(image.texture, sdl2.SDL_ScaleModeNearest)
         sdl2.SDL_SetTextureScaleMode(self.statue_chain_art.texture, sdl2.SDL_ScaleModeNearest)
         self.poison_rest_art = load_asset('2층_수로_돌발판.png')
         self.poison_wall_art = load_asset('2층_수로_돌벽.png')
@@ -221,10 +244,6 @@ class View:
         self.lever_art = load_asset('dungeon_props/lever.png')
         self.puzzle_art = load_asset('puzzle_concepts/echo-puzzle-props-concept.png')
         self.jester_walk = load_asset('monster_concepts/broken-jester-walk-16.png')
-        self.knight_sheets = {
-            name: load_asset(f'monster_concepts/echo-knight-{name}-sheet.png')
-            for name in ('walk', 'attack', 'charge', 'orb', 'bolts')
-        }
         self.echo = load_asset('echo_silver_gold.png')
         self.enemies = {name: load_asset(kind.image) for name, kind in ENEMY_KINDS.items()
                         if asset_path(kind.image).exists()}   # 그림을 지운 몬스터(지금 맵에 없는 돌 수호자 등)는 건너뛴다
@@ -337,8 +356,12 @@ class View:
             self.camera_updated_at = perf_counter()
             self.last_floor = None
         focus = world.recording.preview if world.recording else world.player
-        single_floor = not self.free_camera and world.stage.floors > 1
-        zoomed = world.index in BOSS_ROOMS   # 보스방은 BOSS_ZOOM배로 줄여 넓게 보인다
+        # 마지막 잔향(8)의 4층은 잔향 기사의 보스방: 그 층에 있는 동안은 간수·대마녀 방처럼
+        # 층별 화면 대신 BOSS_ZOOM배로 넓게 보고, 높이 뛰면 화면이 따라 올라간다.
+        boss_floor = (world.index == LAST_BOSS_ROOM and focus.floor == world.stage.floors - 1
+                      and focus.elevator_target is None and not self.free_camera)
+        single_floor = not self.free_camera and world.stage.floors > 1 and not boss_floor
+        zoomed = world.index in BOSS_ROOMS or boss_floor   # 보스방은 BOSS_ZOOM배로 줄여 넓게 보인다
         if zoomed:
             self._begin_zoom()
         if single_floor:
@@ -358,7 +381,7 @@ class View:
         self.camera_x = self.free_camera_x if self.free_camera else min(WIDTH * 2 - view_width, max(0, focus.x - view_width * 0.60))
         if world.stage.floor_height == 400:
             self.camera_lift = 0.0
-        if world.index in (0, 1, 3, 4, 9):
+        if world.index in (0, 1, 3, 4, 9) or world.stage.tower:
             # Follow the active character and keep all floor positions in world space.
             now = perf_counter()
             elapsed = min(0.1, max(0, now - self.camera_updated_at))
@@ -366,7 +389,9 @@ class View:
             gap = world.stage.floor_height
             if gap > 400 and focus.elevator_target is None:
                 # 두 층을 합친 통합방: 캐릭터가 올라가면 화면도 위로 따라간다.
-                self.camera_lift = max(0.0, min(gap - 360.0, focus.jump_height - 100))
+                # 사슬 뱀의 탑은 뱀을 타고 층 높이(800)까지 오르니 화면을 더 높이 올린다
+                top = gap - (260.0 if world.stage.tower else 360.0)
+                self.camera_lift = max(0.0, min(top, focus.jump_height - 100))
             target = gap * (focus.floor if single_floor else focus.floor + focus.elevator_offset) + self.camera_lift
             if not self.free_camera:
                 self.camera_y = target if single_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
@@ -379,7 +404,7 @@ class View:
                     draw_region(image, (0, 0, image.w, floor_row),
                                 -self.camera_x, floor_y, WIDTH * 2, 308)
                     holes = sorted((left, right) for level, left, right
-                                   in (*world.stage.pits, *world.stage.poison_zones) if level == floor)
+                                   in (*world.stage.chasms, *world.stage.poison_zones) if level == floor)
                     start = 0
                     for left, right in (*holes, (WIDTH * 2, WIDTH * 2)):
                         end = min(WIDTH * 2, left)
@@ -392,13 +417,18 @@ class View:
                         start = max(start, right)
             elif world.index == 1:
                 for floor, floor_y in enumerate(self.floor_y):
-                    background = self.beast_jump_backgrounds[floor]
-                    wall_height = background.h - 20 if floor == 0 else background.h
-                    draw_region(background, (0, 0, background.w, wall_height),
-                                -self.camera_x, floor_y, WIDTH * 2, gap)
+                    # 층이 하나인 높은 둥지는 두 그림을 위아래로 이어 붙인다 (위 그림은 윗부분만)
+                    pieces = ((0, 0, 800), (1, 800, gap - 800)) if world.stage.floors == 1 and gap > 800 else ((floor, 0, gap),)
+                    for image_index, offset, span in pieces:
+                        background = self.beast_jump_backgrounds[image_index]
+                        source = background.h - 20 if image_index == 0 else background.h
+                        cut = round(source * min(1.0, span / 800))
+                        draw_region(background, (0, source - cut, background.w, cut),
+                                    -self.camera_x, floor_y + offset, WIDTH * 2, span)
+                    box(0, floor_y + gap, WIDTH, HEIGHT, (8, 9, 18))   # 둥지 천장 위는 어둡게 덮는다
                     floor_image = self.stage1_pixel_image
                     floor_row = round(floor_image.h * 610 / 724)
-                    holes = sorted((left, right) for level, left, right in world.stage.pits if level == floor)
+                    holes = sorted((left, right) for level, left, right in world.stage.chasms if level == floor)
                     start = 0
                     for left, right in (*holes, (WIDTH * 2, WIDTH * 2)):
                         end = min(WIDTH * 2, left)
@@ -408,6 +438,19 @@ class View:
                             draw_region(floor_image, (sx, floor_row, ex - sx, floor_image.h - floor_row),
                                         start - self.camera_x, floor_y - 92, end - start, 92)
                         start = max(start, right)
+            elif world.stage.tower:
+                # 사슬 뱀의 탑: 대마녀 홀 그림을 층마다 어둡게 깔아 탑 안처럼 보이게 한다 (바닥 줄이 그림 아래 60)
+                hall = self.boss_tall_arenas[5]
+                canvas.SDL_SetTextureColorMod(hall.texture, 120, 105, 150)
+                for floor_y in self.floor_y:
+                    draw_region(hall, (0, 0, hall.w, hall.h), -self.camera_x, floor_y - 60, WIDTH * 2, 800)
+                canvas.SDL_SetTextureColorMod(hall.texture, 255, 255, 255)
+                for floor, left, right in world.stage.pits:   # 그림의 바닥이 낭떠러지 위에 보이지 않게 덮는다
+                    y = self.floor_y[floor]
+                    box(left - self.camera_x, y - 90, right - self.camera_x, y + 40, (6, 4, 14))
+                    for step in range(4):   # 위로 갈수록 옅어지는 어둠
+                        box(left - self.camera_x, y + 40 + step * 12, right - self.camera_x, y + 52 + step * 12,
+                            (6, 4, 14, 190 - step * 45))
             elif world.stage.sky:
                 floor_y = self.floor_y[0]
                 image = self.sky_library_art
@@ -458,8 +501,10 @@ class View:
                 target += offset * (levels[floor + 1] - levels[floor])
             elif offset < 0 and floor > 0:
                 target += offset * (levels[floor] - levels[floor - 1])
+            if boss_floor:   # 보스 층 바닥이 간수·대마녀 방과 같은 자리에 오게
+                target = 160 + levels[floor] - 160.0 / BOSS_ZOOM + max(0.0, min(220.0, focus.jump_height - 100))
             if not self.free_camera:
-                self.camera_y = target if single_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
+                self.camera_y = target if single_floor or boss_floor else self.camera_y + max(-850 * elapsed, min(850 * elapsed, target - self.camera_y))
             self.floor_y = tuple(160 + level - self.camera_y for level in levels[:world.stage.floors])
             bottom = self.floor_y[0] - (image.h - 690) * scale_y
             rows = ((455, 724), (228, 455), (0, 228))
@@ -476,16 +521,29 @@ class View:
                                 bottom + levels[3] + (image.h - lower) * scale_y,
                                 WIDTH * 2, (lower - top) * scale_y)
             elif world.index == 8:
+                # 층 사이에서는 560 높이로 눌러 그리고, 보스 층을 넓게 볼 때는 간수·대마녀 방처럼 800 높이로 그린다.
+                # 그림의 바닥 줄은 아래에서 95/560 자리라 800 높이면 136이다.
                 arena = self.late_arcane_arena
+                height, below = (800, 136) if boss_floor else (560, 95)
                 draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
-                            self.floor_y[3] - 95, WIDTH * 2, 560)
-        elif world.index in (2, 5):
+                            self.floor_y[3] - below, WIDTH * 2, height)
+                if boss_floor:
+                    self._draw_fog(world, self.floor_y[3], 0.5, 200, 0.0)   # 캐릭터 뒤 안개
+        elif world.index in BOSS_ROOMS:
+            room = world.index in SKY_ROOMS
             if not self.free_camera:
-                self.camera_y = max(0.0, min(220.0, focus.jump_height - 100))
+                self.camera_y = max(0.0, min(ROOM_LIFT if room else BOSS_LIFT, focus.jump_height - 100))
             self.floor_y = (160.0 / BOSS_ZOOM - self.camera_y,)   # 줄인 뒤에도 바닥이 화면 같은 자리에 오게
             arena = self.boss_tall_arenas[world.index]
-            draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
-                        self.floor_y[0] - 60, WIDTH * 2, 800)
+            if room:
+                # 바닥 위는 비율대로, 발 디딜 줄 아래 받침돌은 화면 아래 끝까지 늘려 그린다
+                floor_y = self.floor_y[0]
+                draw_region(arena, (0, 0, arena.w, ROOM_FLOOR_ROW), -self.camera_x, floor_y, WIDTH * 2, ROOM_ABOVE)
+                draw_region(arena, (0, ROOM_FLOOR_ROW, arena.w, arena.h - ROOM_FLOOR_ROW),
+                            -self.camera_x, floor_y - 220, WIDTH * 2, 220)
+            else:
+                draw_region(arena, (0, 0, arena.w, arena.h), -self.camera_x,
+                            self.floor_y[0] - 60, WIDTH * 2, 800)
             if world.index == 5:
                 self._draw_witch_arena_rain(world.time)
         self.animation_time = world.time
@@ -495,6 +553,11 @@ class View:
             box(x, y, x + 2, y + 2, (118, 174, 187))
         self._draw_map(world)
         self._draw_characters(world)
+        if boss_floor:
+            self._draw_fog(world, self.floor_y[3] - 30, 1.2, 80, 6.0)   # 캐릭터 앞을 지나는 옅은 안개
+        if world.flash_time > 0:   # 보스 스킬이 터지는 순간 화면이 그 보스의 색으로 번쩍인다
+            box(0, 0, canvas.get_canvas_width(), canvas.get_canvas_height(),
+                (*world.flash_color, round(90 * world.flash_time / FLASH_SECONDS)))
         if zoomed:
             self._end_zoom()
         if single_floor:
@@ -522,7 +585,7 @@ class View:
         if world.result == 'defeated':
             self._card('다시 도전', stage_title, '분신의 경로나 본체의 출발 시점을 바꿔 보세요.', 'R   스테이지 재시작')
         elif world.result == 'cleared':
-            if world.index == len(STAGES) - 1:
+            if world.index == STAGE_GROUPS[-1][-1]:   # 마지막 스테이지의 마지막 구역
                 self._card('탈출 성공', 'ECHO ESCAPE', f'{len(STAGE_GROUPS)}개 스테이지의 봉인을 모두 통과했습니다.', 'ENTER   처음부터 다시')
             else:
                 self._card('스테이지 완료', stage_title, '다음 스테이지에서 분신의 새로운 역할을 준비하세요.', 'ENTER   다음 스테이지')
@@ -542,6 +605,46 @@ class View:
             vertex.position = canvas.SDL_FPoint(x, height - y)
             vertex.color = canvas.SDL_Color(r, g, b, a)
         canvas.SDL_RenderGeometry(canvas.renderer, None, vertices, len(points), None, 0)
+
+    def _draw_rotated(self, image, cx, cy, angle, flip=False):
+        """image 가운데를 (cx, cy)에 두고 화면 기준 시계 방향으로 angle도 돌려 그린다."""
+        canvas.SDL_RenderCopyExF(canvas.renderer, image.texture, None,
+                                 canvas.SDL_FRect(cx - image.w / 2, canvas.get_canvas_height() - cy - image.h / 2,
+                                                  image.w, image.h),
+                                 angle, None, canvas.SDL_FLIP_HORIZONTAL if flip else canvas.SDL_FLIP_NONE)
+
+    def _draw_snakes(self, world):
+        """사슬 뱀: 꼬리 → 몸 칸 → 머리. 가로 몸은 윗면이 길 높이에 오고, 세로 몸은 길 위에 가운데를 둔다.
+        머리 볏(위로 솟은 쪽)은 가로일 때 위, 올라갈 때 왼쪽, 내려갈 때 오른쪽을 본다."""
+        art = self.snake_art
+        for snake, (head, _) in zip(world.stage.tower.snakes, world.snake_state):
+            floor_y, total = self.floor_y[snake.floor], chain_snake.length(snake)
+
+            def draw(image, s, along, lift):
+                x, y, dx, dy = chain_snake.point(snake, s)
+                crest = (0, 1) if dy == 0 else (-dy, 0)
+                down = chain_snake.THICK / 2 if dy == 0 else 0.0
+                cx = x + dx * along + crest[0] * lift - self.camera_x
+                cy = floor_y + y - down + dy * along + crest[1] * lift
+                angle = 0 if dy == 0 else (-90 if dy > 0 else 90)
+                self._draw_rotated(image, cx, cy, angle, flip=dx < 0)
+
+            tail = head - snake.cells * chain_snake.CELL
+            if snake.loop or tail - art['꼬리'].w / 2 < total:
+                draw(art['꼬리'], tail, -art['꼬리'].w / 2, 0)
+            for i in range(snake.cells - 1, -1, -1):
+                s = head - (i + 0.5) * chain_snake.CELL
+                if snake.loop or 0 <= s <= total:
+                    draw(art['몸통'], s, 0, 0)
+            if snake.loop or head <= total:   # 고리가 아닌 뱀은 머리가 길 끝에 닿으면 끝으로 들어가 사라진다
+                draw(art['머리'], head, art['머리'].w / 2, (art['머리'].h - chain_snake.THICK) / 2)
+
+    def _draw_nest_platform(self, left, right, y):
+        """2스테이지 거미 둥지의 돌 턱 (PixelLab 그림). 양 끝은 그대로, 가운데만 늘인다. 윗면이 발판 높이다."""
+        image, cap = self.nest_art['턱'], 24
+        draw_region(image, (0, 0, cap, image.h), left, y - image.h, cap, image.h)
+        draw_region(image, (cap, 0, image.w - 2 * cap, image.h), left + cap, y - image.h, right - left - 2 * cap, image.h)
+        draw_region(image, (image.w - cap, 0, cap, image.h), right - cap, y - image.h, cap, image.h)
 
     def _draw_sky_puzzle(self, world):
         """하늘 땅 퍼즐: 염력 범위, 날개 달린 땅, 1·2·3 스위치. 출구 잠금은 출구 그림에서 그린다."""
@@ -566,13 +669,14 @@ class View:
             draw_region(art, (frame * width, 0, width, height), x - width / 2, y - (height - 35), width, height)   # 돌 윗면 35줄
             if index == world.sky_hold:
                 box(x - half - 3, y - 33, x + half + 3, y + 3, CYAN, filled=False)
-            elif book is not None and hypot(bx - book.x, height - book.jump_height - 30) <= sky.reach:
+            elif book is not None and index not in sky.fixed:   # 염력은 맵 어디의 땅이든 잡아 끌어온다
                 box(x - half - 2, y - 32, x + half + 2, y + 2, (214, 176, 255), filled=False)
         for index, (sx, height) in enumerate(sky.switches):
-            on = index < world.sky_progress
+            on = index in world.sky_keys
             x, y = sx - self.camera_x, floor_y + height
-            draw_grounded(self.lever_art, LEVER_FRAMES[on], x, y, 34)
-            self.heading.draw(x - 7, y + 52, str(index + 1), CYAN if on else GOLD)
+            # 출구와 같은 pixelfx 포털. 열쇠를 얻은 포털은 흐리게, 포털마다 소용돌이 박자를 어긋나게
+            draw_sheet(self.attack_fx['portal'], time + index * 0.3, x, y, 1, 1.2, alpha=140 if on else 255)
+            self.heading.draw(x - 7, y + 150, str(index + 1), CYAN if on else GOLD)
 
     def _draw_potions(self, world):
         """물약 슬라임: 결계 금고, 포털 한 쌍(파랑·주황), 날아가는 물약, F로 모으는 동안의 예상 궤적."""
@@ -618,7 +722,7 @@ class View:
         for i in range(sides):
             a, b = i / sides * 6.2832, (i + 1) / sides * 6.2832
             points += [(x, y), (x + radius * cos(a), y + radius * sin(a)), (x + radius * cos(b), y + radius * sin(b))]
-            colors += [(*color[:3], 255)] * 3
+            colors += [(*color[:3], color[3] if len(color) > 3 else 255)] * 3
         self._polygon(points, colors)
 
     def _gear(self, x, y, radius, angle, lit):
@@ -813,30 +917,33 @@ class View:
                 self._draw_puzzle_prop('locked_gate', gx, gy, 90, 112)
             self.small.draw(gx - 25, gy + 125, '보안문', CYAN if world.isolation_closed else GOLD)
 
-        if stage.bridge is not None:
-            bridge = stage.bridge
+        for bridge, tiles in zip(stage.bridges, world.bridge_tiles):
             y = floor_y[bridge.floor]
             left, right = bridge.left - cam, bridge.right - cam
-            # 바닥이 없는 낭떠러지. 분신이 지나간 칸에만 빛 발판이 생겼다가 흐려지며 사라진다.
+            # 바닥이 없는 낭떠러지. 거미 분신이 줄을 타고 지나간 칸에만 거미줄이 쳐졌다가, 끊어질 때가 되면 처지며 흐려진다.
             box(left, y - 90, right, y + 4, (3, 5, 11))
             box(left, y - 90, right, y - 60, (9, 14, 28))
             line(left, y + 4, right, y + 4, (30, 44, 66))
-            texture = self.puzzle_art.texture
-            for index, remaining in enumerate(world.bridge_tiles):
+            for index, remaining in enumerate(tiles):
                 if remaining <= 0:
                     continue
-                x = bridge.left + (index + 0.5) * bridge.tile - cam
-                fade = min(1.0, remaining / 0.6)
-                canvas.SDL_SetTextureAlphaMod(texture, round(255 * fade))
-                self._draw_puzzle_prop('bridge', x, y - 30 + (1 - fade) * 8, bridge.tile + 6, 34)
-                canvas.SDL_SetTextureAlphaMod(texture, 255)
-            preview = world.recording.preview if world.recording is not None else None
-            if preview is not None and preview.floor == bridge.floor and world.bridge_tile_at(preview.x) is not None:
-                # 녹화 중에는 분신이 만들 발판 자리를 점선으로 미리 보여 준다.
-                tile = world.bridge_tile_at(preview.x)
-                x = bridge.left + tile * bridge.tile - cam
-                box(x + 4, y - 4, x + bridge.tile - 4, y, CYAN)
-            self.small.draw(left + 10, y + 24, '낭떠러지 · 분신의 빛 발판만 밟을 수 있음', CYAN)
+                fresh = min(1.0, remaining / 0.6)
+                x0 = bridge.left + index * bridge.tile - cam
+                x1, sag, alpha = x0 + bridge.tile, 6 * (1 - fresh), round(230 * fresh)
+                box(x0, y - 9 - sag, x1, y - sag, (215, 220, 235, alpha // 4))
+                for top in (y - sag, y - 1 - sag, y - 9 - sag):
+                    line(x0, top, x1, top, (230, 233, 245, alpha))
+                for start in range(0, bridge.tile, bridge.tile // 2):   # 칸마다 X자 실 두 개
+                    line(x0 + start, y - sag, x0 + start + bridge.tile // 2, y - 9 - sag, (175, 182, 205, alpha))
+                    line(x0 + start, y - 9 - sag, x0 + start + bridge.tile // 2, y - sag, (175, 182, 205, alpha))
+        for floor, x, bottom, top, remaining, _ in world.ropes:
+            # 거미 밧줄: 조각상 아랫면에서 바닥(발판)까지 늘어진 두 겹 실. 끊어질 때가 되면 흐려진다.
+            alpha = round(235 * min(1.0, remaining / 0.8))
+            rx, y = x - cam, floor_y[floor]
+            for dx, color in ((-1, (230, 233, 245, alpha)), (1, (175, 182, 205, alpha))):
+                line(rx + dx, y + bottom, rx + dx, y + top + ROPE_TOP, color)
+            for knot in range(round(bottom) + 20, round(top + ROPE_TOP), 40):
+                line(rx - 3, y + knot, rx + 3, y + knot + 4, (230, 233, 245, alpha))
 
         for elevator in stage.elevators:
             x = elevator.x - self.camera_x
@@ -887,10 +994,18 @@ class View:
                 art = self.boss_platform_art
                 draw_region(art, (0, 0, art.w, art.h), (left + right - art.w) / 2, y - art.h, art.w, art.h)
                 continue
+            if world.index == 1:
+                self._draw_nest_platform(left, right, y)
+                continue
             # 숨은 발판은 보라색, 늘 보이는 점프맵 발판은 돌색
             fill, edge = ((124, 82, 178), (214, 176, 255)) if platform.hidden else ((88, 92, 112), (150, 156, 178))
             box(left, y - 10, right, y, fill)
             box(left, y - 10, right, y, edge, filled=False)
+        for x, height, _ in world.eggs:   # 거미 알: 둥실거리며 빛난다
+            image = self.nest_art['거미알']
+            y = self.floor_y[0] + height + 3 * sin(world.time * 3)
+            self._disc(x - self.camera_x, y + image.h / 2, 22 + 3 * sin(world.time * 5), (150, 110, 255, 70))
+            draw_region(image, (0, 0, image.w, image.h), x - self.camera_x - image.w / 2, y, image.w, image.h)
         if stage.lens is not None:
             # 렌즈 건축물: 놋쇠 테 안의 유리. 켜지면 청록 빛이 방 전체로 퍼진다.
             lens = stage.lens
@@ -903,18 +1018,21 @@ class View:
                     a = i / 8 * 6.2832 + world.time
                     line(x + 22 * cos(a), y + 22 * sin(a), x + 60 * cos(a), y + 60 * sin(a), CYAN)
             self.small.draw(x - 14, y + 30, '렌즈', CYAN if world.lens_lit else GOLD)
-        for switch, on in zip(stage.switches, world.switched):
-            # 공중 턱의 스위치와 그것이 여는 잠긴 문
+        ferries = {platform.switch for platform in stage.platforms if platform.switch is not None}
+        for index, (switch, on) in enumerate(zip(stage.switches, world.switched)):
+            # 공중 턱의 스위치와 그것이 여는 잠긴 문. 나룻배 발판을 켜는 스위치는 '레버'라고 적는다
             sx, sy = switch.x - self.camera_x, self.floor_y[switch.floor] + switch.height
             draw_grounded(self.lever_art, LEVER_FRAMES[on], sx, sy, 34)
-            self.small.draw(sx - 22, sy + 45, '스위치', CYAN if on else GOLD)
-            if switch.door is None:
+            self.small.draw(sx - 22, sy + 45, '레버' if index in ferries else '스위치', CYAN if on else GOLD)
+            if switch.door is None or index in ferries:
                 continue   # 출구 포탈 스위치: 문 대신 출구에 포탈이 생긴다
             dx, dy = switch.door.x - self.camera_x, self.floor_y[switch.door.floor]
             draw_grounded(self.gate_art, GATE_FRAMES[on], dx, dy, 112)
             self.small.draw(dx - 22, dy + 124, '열린 문' if on else '잠긴 문', CYAN if on else GOLD)
         if stage.sky:
             self._draw_sky_puzzle(world)
+        if stage.tower:
+            self._draw_snakes(world)
         self._draw_potions(world)
         for actor in world._watchers():
             if actor.radar and actor.elevator_target is None:
@@ -947,9 +1065,11 @@ class View:
                     y = self.floor_y[floor]
                     box(min(z[1] for z in zones) - self.camera_x, y - 92,
                         max(z[2] for z in zones) - self.camera_x, y, (12, 22, 12))
-            self.poison_fx.draw_pool(stage.poison_zones, stage.poison_platforms,
-                                     self.floor_y, self.camera_x, world.time,
-                                     draw_stone=world.index != 0)
+            pool_y = tuple(y - POISON_DEPTH for y in self.floor_y)   # 수면은 바닥선보다 POISON_DEPTH 낮다
+            # 1스테이지는 쉬는 돌판을 바닥 높이에 따로 그리니, 낮춘 독물은 돌판 아래도 비우지 않고 채운다
+            self.poison_fx.draw_pool(stage.poison_zones, stage.poison_platforms if world.index != 0 else (),
+                                     pool_y, self.camera_x, world.time,
+                                     draw_stone=world.index != 0, cut=POISON_DEPTH + 4)
             if world.index == 0:
                 for floor in sorted({zone[0] for zone in stage.poison_zones}):
                     zones = [zone for zone in stage.poison_zones if zone[0] == floor]
@@ -964,30 +1084,28 @@ class View:
                             art = self.poison_rest_art
                             draw_region(art, (0, 250, art.w, 255), start - self.camera_x,
                                         y - 26, end - start, 28)
-            self.poison_fx.draw(stage.poison_zones, self.floor_y, self.camera_x, world.time,
+            self.poison_fx.draw(stage.poison_zones, pool_y, self.camera_x, world.time,
                                 [world.player, *world.echo_actors()])
 
         for beam in stage.web_beams:
-            image = self.web_beam_art
             scale = 0.85 if world.index == 0 and beam.floor == 1 else 1.0
-            width = (beam.right - beam.left) * scale
+            width, height = (beam.right - beam.left) * scale, beam.height * scale
             left = (beam.left + beam.right - width) / 2 - self.camera_x
+            bottom = self.floor_y[beam.floor] + beam.underside
+            # 조각상은 방 천장(1스테이지 그림은 308, 그 밖은 위층 바닥 두께 92 아래)에서 쇠사슬로 매달려 있다.
+            # 사슬은 늘이지 않고 이어 붙인다.
+            chain = self.statue_chain_art
+            ceiling = 308 if world.index == 0 else stage.floor_height - 92
+            y, top, link = bottom + height - 4, self.floor_y[beam.floor] + ceiling, chain.h * 10 / 224
+            while y < top:
+                piece = min(link, top - y)
+                draw_region(chain, (400, 0, 224, round(chain.h * piece / link)), left + width / 2 - 5, y, 10, piece)
+                y += piece
             if world.index == 0:
-                height = beam.height * scale
-                sprite_width = height
-                if beam.floor in (0, 1):
-                    chain_bottom = self.floor_y[beam.floor] + beam.underside + height - 4
-                    chain_top = self.floor_y[beam.floor] + 308
-                    if chain_top > chain_bottom:
-                        draw_region(self.statue_chain_art, (400, 0, 224, self.statue_chain_art.h),
-                                    left + width / 2 - 5, chain_bottom, 10, chain_top - chain_bottom)
                 draw_region(self.pixel_statue_art, (0, 0, self.pixel_statue_art.w, self.pixel_statue_art.h),
-                            left + (width - sprite_width) / 2,
-                            self.floor_y[beam.floor] + beam.underside, sprite_width, height)
-                continue
-            draw_region(image, (0, 0, image.w, image.h), left,
-                        self.floor_y[beam.floor] + beam.underside,
-                        width, beam.height * scale)
+                            left + (width - height) / 2, bottom, height, height)
+            else:
+                draw_region(self.web_beam_art, (0, 0, self.web_beam_art.w, self.web_beam_art.h), left, bottom, width, height)
 
         for gate, state in zip(stage.gates, world.doors):
             px, py = gate.plate.x - self.camera_x, self.floor_y[gate.plate.floor]
@@ -1002,7 +1120,19 @@ class View:
                 draw_grounded(self.lever_art, LEVER_FRAMES[state.latched], lx, ly, 34)
                 self.small.draw(lx - 20, ly + 45, 'E 레버', CYAN if state.latched else GOLD)
 
-        x, y = stage.exit.x - self.camera_x, self.floor_y[stage.exit.floor]
+        for gate in stage.hunt_gates:
+            # 사냥 문: 그 구역 몬스터를 모두 쓰러뜨리면 열린다. 남은 수를 문 아래에 보인다.
+            opened = world.hunt_open(gate)
+            gx, gy = gate.door.x - self.camera_x, self.floor_y[gate.door.floor]
+            draw_grounded(self.gate_art, GATE_FRAMES[opened], gx, gy, 112)
+            left = sum(enemy.spawn.point.floor == gate.door.floor and gate.left <= enemy.spawn.point.x <= gate.right
+                       for enemy in world.enemies)
+            self.small.draw(gx - 28, gy + 124, '열린 문' if opened else f'사냥 문 {left}', CYAN if opened else GOLD)
+
+        x, y = stage.exit.x - self.camera_x, self.floor_y[stage.exit.floor] + stage.exit_height
+        if world.portal_opened_at is not None:
+            self._draw_boss_portal(world, x, y)
+            return
         if any(switch.door is None for switch in stage.switches):
             # 출구 포탈: 스위치를 누르면 민트색 포탈(pixelfx arcane/portal)이 열린다. 그 전엔 아무것도 없다.
             if world.portal_open:
@@ -1012,15 +1142,36 @@ class View:
             frame = int(world.time * 8) % 6
             self.pixel_sprites.blit(self.pixel_sprites.prop(('exit', frame), lambda: pixel_sprites.draw_exit(frame)),
                                     x, y, 1)
-        elif stage.sky and world.sky_progress < len(stage.sky.switches):
-            draw_grounded(self.gate_art, GATE_FRAMES[0], x, y, 112)   # 세 스위치를 밟기 전엔 닫힌 문
+        elif world.index in SKY_ROOMS:
+            return   # 포털 너머 방: 몬스터를 다 잡으면 위에서 돌아가는 포털을 그린다
+        elif stage.sky and len(world.sky_keys) < len(stage.sky.switches):
+            # 하늘 땅 출구는 문 없이 열쇠 3개를 모으면 pixelfx 포털이 열린다 (위 _draw_boss_portal). 그 전엔 남은 열쇠만 적는다
+            self.small.draw(x - 30, y + 30, f'열쇠 {len(world.sky_keys)}/{len(stage.sky.switches)}', RED)
+            return
         else:
             draw_grounded(self.exit_art, EXIT_FRAME, x, y, 105)
         locked = any(enemy.spawn.kind in BOSS_KINDS for enemy in world.enemies)
-        sky_locked = stage.sky and world.sky_progress < len(stage.sky.switches)
-        self.small.draw(x - 35 if locked or sky_locked else x - 15, y + 116,
-                        '보스 처치 필요' if locked else '1→2→3 스위치' if sky_locked else '출구',
-                        RED if locked or sky_locked else CYAN)
+        self.small.draw(x - 35 if locked else x - 15, y + 116, '보스 처치 필요' if locked else '출구',
+                        RED if locked else CYAN)
+
+    def _draw_boss_portal(self, world, x, y):
+        """보스를 처치하면 열리는 출구 포털(pixelfx Portal). 0.6초 동안 커지며 열리고, 둘레의 빛 알갱이가
+        소용돌이치며 빨려 들어간다. 본체가 가까울수록 알갱이가 많고 빠르다."""
+        opened = min(1.0, (world.time - world.portal_opened_at) / 0.6)
+        scale = 2 * (1 - (1 - opened) ** 3)
+        if scale > 0.05:
+            draw_sheet(self.attack_fx['portal'], world.time, x, y, 1, scale)
+        cy = y + PORTAL_CENTER * scale / 2
+        near = max(0.0, 1 - abs(world.player.x - world.stage.exit.x) / PULL_RANGE)
+        for i in range(12 + round(16 * near)):
+            phase = (world.time * (0.7 + near) + i * 0.618) % 1
+            radius = 230 * (1 - phase) * opened
+            angle = i * 2.4 + phase * 4.0
+            self._disc(x + cos(angle) * radius, cy + sin(angle) * radius * 0.55, 1.5 + 2.5 * phase,
+                       (150, 255, 220), sides=6)
+        if opened < 1 or world.absorb_time:
+            return
+        self.small.draw(x - 15, y + 250, '포털', CYAN)
 
     def _draw_slime_trail(self, world):
         """물약 슬라임이 지나간 자리에 물약 자국을 남긴다. 자국은 PUDDLE_SECONDS 동안 옅어지며 사라진다."""
@@ -1068,11 +1219,6 @@ class View:
                                          enemy.windup, enemy.recovery, opacity=opacity, tint=tint,
                                          skill=(enemy.skill, *skill_phase) if skill_phase else None,
                                          broom=enemy.broom)
-            elif enemy.spawn.kind == 'echo_knight':
-                self._draw_echo_knight(screen_enemy, y, kind.size, skill_phase, tint)
-                if skill_phase is None and pose is not None:
-                    draw_attack_effect(self.attack_fx, enemy.spawn.kind, x, y, screen_enemy.actor.facing,
-                                       enemy.windup, enemy.recovery)
             elif enemy.spawn.kind in late_monster_motion.KINDS:
                 image = self.jester_walk if enemy.spawn.kind == 'broken_jester' else self.enemies[enemy.spawn.kind]
                 late_monster_motion.draw(image, screen_enemy.actor, y, kind.size, world.time,
@@ -1125,10 +1271,11 @@ class View:
             if effect.drop:
                 # 낙석: 점점 빨라지며 떨어지고, 떨어질 자리에 그림자가 커진다.
                 fall = min(1, effect.age / effect.life)
-                box(x - 8 - 26 * fall, y - 3, x + 8 + 26 * fall, y + 3, (0, 0, 0, round(70 + 110 * fall)))
+                box(x - 12 - 38 * fall, y - 4, x + 12 + 38 * fall, y + 4, (0, 0, 0, round(70 + 110 * fall)))
                 y += effect.drop * (1 - fall * fall)
-            draw_sheet(self.attack_fx[effect.sheet], effect.age, x, y, effect.facing, effect.scale)
+            draw_sheet(self.attack_fx[effect.sheet], effect.age, x, y, effect.facing, effect.scale, FX_ALPHA, FX_TINT)
         self._draw_witch_laser(world)
+        self._draw_hands_mark(world)
         if world.skill_unlock_time > 0:
             # 간수의 방에 처음 들어오면 능력 획득 알림판이 화면 위쪽에 미끄러져 들어온다.
             draw_sheet(self.attack_fx['skill-unlock'], SKILL_UNLOCK_SECONDS - world.skill_unlock_time,
@@ -1154,17 +1301,23 @@ class View:
             if warning:
                 line(x - field.radius, y + 3, x + field.radius, y + 3, PURPLE)
                 self.small.draw(x - 28, y + 30, '중력 예고', PURPLE)
-            draw_sheet(self.attack_fx['black-hole'], field.age, x, y, 1, 1.6,
+            draw_sheet(self.attack_fx['black-hole'], field.age, x, y, 1, 2.2,
                        100 if warning else 255)
             if field.captured:
                 self.small.draw(x - 80, y + 130, '반대 방향키로 탈출!', WHITE)
 
         player_alpha = 170 if recording else 255
-        if world.invulnerable > 0 and int(world.time * 18) % 2:
-            player_alpha = 130
+        if world.invulnerable > 0 and int(world.time * 8) % 2:
+            player_alpha = 170
         player = self._screen_actor(world.player)
         normal_floors = self.floor_y
         floor = self._actor_floor_y(world.player) + world.player.jump_height
+        if world.absorb_time:
+            # 포털에 빨려 들어간다: 포털 가운데로 떠오르며 흐려진다.
+            t = min(1.0, world.absorb_time / ABSORB_SECONDS)
+            player.x += (world.stage.exit.x - self.camera_x - player.x) * t
+            floor += (PORTAL_CENTER - 45) * t * t
+            player_alpha = round(255 * (1 - t))
         attack = None
         if world.attack_flash > 0:
             attack = (world.attack_kind, 1 - world.attack_flash / world.attack_duration)
@@ -1241,36 +1394,32 @@ class View:
             draw_floor -= walk.draw_height * (443 - foot_rows[frame]) / 443
         walk.draw(actor, draw_floor, opacity=opacity, faces=faces)
 
-    def _draw_echo_knight(self, enemy, floor_y, size, skill_phase, tint):
-        actor = enemy.actor
-        if skill_phase is not None:
-            name = enemy.skill
-            phase, progress = skill_phase
-            if phase == 'telegraph':
-                frame = min(2, int(progress * 3))
-            elif phase == 'active':
-                frame = 3 + min(2, int(progress * 3))
-            else:
-                frame = 6 + min(1, int(progress * 2))
-        elif enemy.windup > 0:
-            name = 'attack'
-            frame = min(3, max(0, int((1 - enemy.windup / 0.31) * 4)))
-        elif enemy.recovery > 0:
-            name = 'attack'
-            frame = 4 + min(3, max(0, int((1 - enemy.recovery / 0.65) * 4)))
-        else:
-            name = 'walk'
-            frame = int(actor.walk_distance / 9) % 16 if actor.moving else 0
+    def _draw_fog(self, world, floor_y, parallax, alpha, delay):
+        """잔향 기사 방의 보랏빛 달안개(pixelfx Fog). 한 칸을 2.5배로 키워 방 너비만큼 이어 붙이고,
+        이음매가 보이지 않게 한 칸씩 좌우를 뒤집는다. parallax만큼 카메라와 다르게 흘러 깊이가 생긴다."""
+        sheet = self.attack_fx['fog']
+        width = sheet[1]['frameSize'][0] * FOG_SCALE
+        shift = (self.camera_x * (parallax - 1)) % (2 * width)
+        for k in range(-1, round(ZOOM_WIDTH / width) + 3):
+            draw_sheet(sheet, world.time + delay, k * width - shift + width / 2, floor_y,
+                       1 if k % 2 == 0 else -1, FOG_SCALE, alpha)
 
-        image = self.knight_sheets[name]
-        columns, rows = (4, 4) if name == 'walk' else (4, 2)
-        width, height = image.w // columns, image.h // rows
-        region = ((frame % columns) * width, (frame // columns) * height, width, height)
-        draw_width = size * width / height
-        canvas.SDL_SetTextureColorMod(image.texture, *tint)
-        draw_region(image, region, actor.x - draw_width / 2, floor_y, draw_width, size,
-                    flip=actor.facing != -1)
-        canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
+    def _draw_hands_mark(self, world):
+        """잔향 기사의 그림자 손아귀 예고: 손이 솟을 바닥에 보랏빛 어둠이 점점 짙게 번진다."""
+        for enemy in world.enemies:
+            phase = boss_skills.phase(enemy)
+            if enemy.skill != 'hands' or phase is None or phase[0] != 'telegraph':
+                continue
+            x, y = enemy.mark_x - self.camera_x, self.floor_y[enemy.actor.floor]
+            spread, pulse = 0.4 + 0.6 * phase[1], 0.75 + 0.25 * abs(sin(world.time * 10))
+            points, colors = [], []
+            for i in range(24):
+                a, b = i / 24 * 2 * pi, (i + 1) / 24 * 2 * pi
+                points += [(x, y), (x + 130 * spread * cos(a), y + 27 * spread * sin(a)),
+                           (x + 130 * spread * cos(b), y + 27 * spread * sin(b))]
+                # 바닥이 보랏빛이라 거의 불투명하게 그려야 보인다
+                colors += [(28, 4, 50, 255), (170, 90, 255, round(200 * pulse)), (170, 90, 255, round(200 * pulse))]
+            self._polygon(points, colors)
 
     def _draw_witch_laser(self, world):
         """대마녀의 마력 광선. 예고 때는 지나갈 높이에 가는 선이 깜빡이고 마력이 모이며, 발동하면 방 끝까지 뻗는다."""
@@ -1283,23 +1432,27 @@ class View:
             x0 = actor.x + actor.facing * 60 - self.camera_x
             x1 = (RIGHT if actor.facing > 0 else LEFT) - self.camera_x
             if phase[0] == 'telegraph':
-                alpha = 60 + round(150 * phase[1] * abs(sin(world.time * 16)))
+                alpha = 40 + round(90 * phase[1] * abs(sin(world.time * 6)))
                 box(min(x0, x1), y - 1, max(x0, x1), y + 1, (226, 150, 255, alpha))
-                draw_sheet(self.attack_fx['spell-charge'], world.time, x0, y - 22 * 1.4, actor.facing, 1.4)
+                draw_sheet(self.attack_fx['spell-charge'], world.time, x0, y - 22 * 2.2, actor.facing, 2.2, FX_ALPHA, FX_TINT)
                 continue
             # 발동: pixelfx arcane-beam 한 칸을 광원·몸통·끝 불꽃 세 조각으로 나눠 몸통만 방 끝까지 늘린다.
             image, meta = self.attack_fx['arcane-beam']
             frame = int(world.time * meta['fps']) % meta['frames']
             w, h = meta['frameSize']
             sx, sy = frame % meta['columns'] * w, frame // meta['columns'] * h
-            scale, head, tail = 1.4, 60, 84
+            scale, head, tail = 2.0, 60, 84   # 두께 2배: 맞는 폭(LASER_HALF)과 비슷하게 보인다
             body = max(0.0, abs(x1 - x0) - (head + tail) * scale)
             bottom = y - (h - 60) * scale   # 원본 칸에서 광선 가운데는 위에서 60줄
             offset = 0.0
+            canvas.SDL_SetTextureAlphaMod(image.texture, FX_ALPHA)
+            canvas.SDL_SetTextureColorMod(image.texture, *FX_TINT)
             for src_x, src_w, dest_w in ((0, head, head * scale), (head, w - head - tail, body), (w - tail, tail, tail * scale)):
                 left = x0 + offset if actor.facing > 0 else x0 - offset - dest_w
                 draw_region(image, (sx + src_x, sy, src_w, h), left, bottom, dest_w, h * scale, actor.facing < 0)
                 offset += dest_w
+            canvas.SDL_SetTextureAlphaMod(image.texture, 255)
+            canvas.SDL_SetTextureColorMod(image.texture, 255, 255, 255)
 
     def _draw_dash_trail(self, actor):
         """대시 잔상: 지나온 길에 은빛 분신 그림이 4개 남았다가 뒤쪽부터 흐려진다 (잔향)."""
@@ -1331,7 +1484,7 @@ class View:
         if actor.jump_time > 0:
             if jump_art is None:
                 jump_art = self.echo_jump_art
-            progress = min(7.999, actor.jump_time * 8 / JUMP_DURATION)
+            progress = min(7.999, actor.jump_time * 8 / actor.jump_duration)
             phase = int(progress)
             # Blend briefly into the next pose instead of abruptly replacing it.
             blend = max(0.0, (progress - phase - 0.65) / 0.35) if phase < 7 else 0.0
@@ -1573,9 +1726,9 @@ class View:
             marker(stage.isolation.lever, PURPLE)
             marker(stage.isolation.door, GOLD)
             marker(stage.isolation.exit_gate, GOLD)
-        if stage.bridge:
-            for x in range(stage.bridge.left, stage.bridge.right, stage.bridge.tile):
-                marker(Point(x + stage.bridge.tile / 2, stage.bridge.floor), (40, 60, 90), 1)
+        for bridge in stage.bridges:
+            for x in range(bridge.left, bridge.right, bridge.tile):
+                marker(Point(x + bridge.tile / 2, bridge.floor), (40, 60, 90), 1)
 
         marker(stage.exit, CYAN, 3)
         for enemy in world.enemies:

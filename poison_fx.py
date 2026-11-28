@@ -158,8 +158,9 @@ class PoisonFx:
         self.time = None
         self.pools = {}      # (층, 웅덩이, 돌판) → 미리 찍어 둔 텍스처
 
-    def draw_pool(self, zones, rests, floor_y, camera_x, time, draw_stone=True):
-        """독 웅덩이 전체(돌 테두리·돌판·독물)를 도트 텍스처로 그린다."""
+    def draw_pool(self, zones, rests, floor_y, camera_x, time, draw_stone=True, cut=0):
+        """독 웅덩이 전체(돌 테두리·돌판·독물)를 도트 텍스처로 그린다. cut(px)만큼 아래쪽을 잘라
+        웅덩이를 낮춰 그려도 바닥 두께 아래(아래층 화면)로 비어져 나오지 않게 한다."""
         for floor in sorted({zone[0] for zone in zones}):
             mine = tuple(zone for zone in zones if zone[0] == floor)
             key = (floor, mine, tuple(rests), draw_stone)
@@ -167,9 +168,11 @@ class PoisonFx:
                 self.pools[key] = _bake(floor, mine, rests, draw_stone)
             frames, left, width = self.pools[key]
             top = floor_y[floor] + LIP * DOT
+            rows = ROWS - -(-cut // DOT)
             rect = sdl2.SDL_Rect(int(left - camera_x), int(canvas.get_canvas_height() - top),
-                                 width * DOT, ROWS * DOT)
-            sdl2.SDL_RenderCopy(canvas.renderer, frames[int(time * FPS) % FRAMES], None, rect)
+                                 width * DOT, rows * DOT)
+            sdl2.SDL_RenderCopy(canvas.renderer, frames[int(time * FPS) % FRAMES],
+                                sdl2.SDL_Rect(0, 0, width, rows), rect)
 
     def draw(self, zones, floor_y, camera_x, time, actors):
         if self.time is None or time < self.time:   # 새 스테이지

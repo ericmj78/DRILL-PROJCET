@@ -9,6 +9,7 @@ MAX_RECORD_SECONDS = 10
 # 본체 레벨 (BALANCE.md). 레벨 1~9에서 다음 레벨까지 필요한 경험치이며 최대 레벨은 10이다.
 LEVEL_UP_XP = (30, 45, 60, 80, 100, 120, 140, 160, 180)
 HAZARD_RATIO = 0.2      # 숨은 함정은 최대 체력의 20%를 깎는다.
+POISON_DEPTH = 28       # 독 웅덩이 수면은 바닥선보다 이만큼 낮다. 웅덩이 앞 바닥이나 낮게 줄을 타고 지날 때는 닿지 않는다
 LATE_STAGE_SCALE = 1.6  # 7~9스테이지의 몬스터 체력·피해 배율
 
 
@@ -72,6 +73,9 @@ class Platform:
     swing: int = 0
     period: float = 1.0
     phase: float = 0.0     # 0~1, 처음 위치
+    # 나룻배 발판: switch(스위치 번호)가 눌린 뒤에는 본체·분신이 올라서 있는 동안 처음 자리에서 반 바퀴(swing의 두 배)
+    # 건너편으로 가고, 아무도 없으면 처음 자리로 돌아온다. 스위치가 눌리기 전에는 움직이지 않는다.
+    switch: int | None = None
 
     def shift(self, clock: float) -> float:
         return self.swing * sin(2 * pi * (clock / self.period + self.phase)) if self.swing else 0.0
@@ -101,7 +105,7 @@ class SkyPuzzle:
     fixed: tuple[int, ...] = ()               # 염력으로 잡을 수 없는 땅 번호
 
 
-SKY_STEP = 38   # 보통 점프(높이 48)로 오를 수 있는 한 단
+SKY_STEP = 76   # 하늘 땅의 높은 점프(96, world.HIGH_JUMP_HEIGHT)로 오를 수 있는 한 단. 두 단은 2단 점프로만 오른다
 
 
 @dataclass(frozen=True)
@@ -114,11 +118,13 @@ class Lens:
 
 @dataclass(frozen=True)
 class WebBeam:
+    """거미 분신이 줄을 붙이는 매달린 조각상. rope면 재현 분신이 줄을 붙일 때 본체가 오를 수 있는 밧줄이 늘어진다."""
     floor: int
     left: int
     right: int
     underside: int
     height: int = 70
+    rope: bool = False
 
 
 @dataclass(frozen=True)
@@ -152,12 +158,43 @@ class IsolationRoom:
 
 @dataclass(frozen=True)
 class EchoBridge:
-    """낭떠러지. 분신이 지나간 자리에만 잠깐 빛 발판이 생긴다."""
+    """거미줄 다리 낭떠러지. 거미 분신(재현)이 줄에 매달리거나 날아서 지나간 자리 아래에 거미줄이 쳐지고
+    life초 뒤 끊어진다. 본체는 거미줄 위만 걸을 수 있고, 거미줄이 없는 곳은 구덩이라 떨어진다."""
     floor: int
     left: int
     right: int
-    tile: int = 60        # 발판 한 칸의 폭
-    life: float = 2.2     # 분신이 지나간 뒤 발판이 남아 있는 시간
+    tile: int = 40        # 거미줄 한 칸의 폭
+    life: float = 2.2     # 거미가 지나간 뒤 거미줄이 남아 있는 시간
+
+
+@dataclass(frozen=True)
+class HuntGate:
+    """사냥 문. 그 층 left~right에서 나온 몬스터를 모두 처치해야 열린다."""
+    door: Point
+    left: int
+    right: int
+
+
+@dataclass(frozen=True)
+class Snake:
+    """사슬 뱀 (chain_snake.py). 머리가 path의 꺾인 길((x, 높이) 점들, 그 층 바닥 기준)을 따라가고 몸이 머리가 지나간 칸을
+    따라온다. 가로 몸은 윗면이 길 높이다. wait면 본체가 올라탈 때까지 멈춰 있고, partner(뱀 번호)도 함께 출발한다.
+    loop면 ㅁ자 길을 끝없이 돌고 사라지지 않는다. 고리가 아니면 머리가 길 끝에 닿은 뒤 꼬리까지 끝으로 빨려 들어가 사라진다."""
+    floor: int
+    path: tuple[tuple[int, int], ...]
+    speed: float
+    cells: int = 6
+    loop: bool = False
+    wait: bool = True
+    partner: int | None = None
+
+
+@dataclass(frozen=True)
+class SnakeTower:
+    """사슬 뱀의 탑. 층 사이 길은 뱀뿐이다. 뱀을 타고 층 높이(floor_height)까지 오르면 위층으로 넘어가고,
+    떨어지면 그 층 시작 자리(starts의 x)로 돌아가며 그 층 뱀도 처음 자리로 돌아간다."""
+    snakes: tuple[Snake, ...]
+    starts: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -239,7 +276,8 @@ class Stage:
     guard: Point | None = None
     watch_gate: WatchGate | None = None
     isolation: IsolationRoom | None = None
-    bridge: EchoBridge | None = None
+    bridges: tuple[EchoBridge, ...] = ()
+    hunt_gates: tuple[HuntGate, ...] = ()
     echo_seconds: float = MAX_RECORD_SECONDS  # 이 스테이지에서 분신 한 번에 녹화할 수 있는 시간
     elevators: tuple[Stair, ...] = ()
     enemy_scale: float = 1.0  # 몬스터 체력·피해 배율
@@ -256,6 +294,14 @@ class Stage:
     sky: SkyPuzzle | None = None
     # 결계 (왼쪽, 아래 높이, 오른쪽, 위 높이). 물약 슬라임의 물약은 여기 닿으면 깨진다. 사람과 땅은 지나간다.
     seals: tuple[tuple[int, int, int, int], ...] = ()
+    tower: SnakeTower | None = None
+    exit_height: int = 0   # 출구가 공중 턱 위에 있으면 그 높이
+    eggs: tuple[tuple[int, int, int], ...] = ()   # 거미 알 (x, 높이, 경험치). 본체가 닿으면 경험치를 얻는다
+
+    @property
+    def chasms(self):
+        """떨어지는 곳 (층, 왼쪽, 오른쪽): 구덩이와 거미줄 다리 낭떠러지."""
+        return self.pits + tuple((bridge.floor, bridge.left, bridge.right) for bridge in self.bridges)
 
 
 STAGES = (
@@ -270,62 +316,54 @@ STAGES = (
         ),
         web_beams=(WebBeam(0, 680, 800, 215),
                    WebBeam(1, 628, 748, 175), WebBeam(1, 1087, 1207, 175),
-                   WebBeam(1, 1405, 1525, 175)),
+                   WebBeam(1, 1405, 1525, 175),
+                   # 3층: 낭떠러지 위 조각상 다섯 개. 거미 분신이 줄을 쏘고 뛰기를 되풀이해 건너간다.
+                   WebBeam(2, 640, 760, 215), WebBeam(2, 865, 985, 215), WebBeam(2, 1105, 1225, 215),
+                   WebBeam(2, 1330, 1450, 215), WebBeam(2, 1550, 1670, 215)),
         # 2층: 독 웅덩이 3개 사이에 거미가 쉬어 가는 바닥 2개
         poison_zones=((1, 518, 885), (1, 1027, 1273), (1, 1355, 1525)),
         poison_platforms=((1, 885, 1027), (1, 1273, 1355)),
-        # 3층: 가운데 구덩이 위에 보이지 않는 발판이 1~4단 지그재그로 놓여 있다.
-        pits=((2, 540, 1798),),
-        platforms=(
-            Platform(2, 600, 700, 0), Platform(2, 760, 860, 36), Platform(2, 650, 740, 72),
-            Platform(2, 800, 1100, 108), Platform(2, 1180, 1280, 36), Platform(2, 1340, 1420, 72),
-            Platform(2, 1480, 1580, 108), Platform(2, 1660, 1740, 0),
-        ),
+        # 3층: 거미줄 다리 낭떠러지. 거미 분신이 줄을 타고 지나간 자리에만 3초 동안 거미줄이 쳐진다.
+        #   건너편 바닥(1850)에는 레버 스위치가 있다. 거미 분신을 녹화해 건너가 레버를 누르면 낭떠러지 앞 나룻배 발판
+        #   (높이 30, 뛰어 올라탄다)이 켜진다. 본체로 돌아와 그 위에 서 있으면 건너편까지 실어 간다.
+        bridges=(EchoBridge(2, 560, 1760, life=3.0),),
+        switches=(Switch(2, 1850, 0),),
+        platforms=(Platform(2, 1110, 1210, 30, False, swing=650, period=12.0, phase=0.75, switch=0),),
         enemies=(
             EnemySpawn('crawler', Point(1100, 0), (1000, 1200)),
             EnemySpawn('crawler', Point(1800, 0), (1700, 1900)),
-            EnemySpawn('watcher', Point(450, 2), (380, 510)),
-            # 단마다 떠다니는 유령. 위 단일수록 빠르고 넓게 돈다.
-            EnemySpawn('tier_ghost', Point(650, 2), (580, 720), height=0),
-            EnemySpawn('tier_ghost', Point(1000, 2), (760, 1280), height=36),
-            EnemySpawn('tier_ghost', Point(1000, 2), (650, 1420), height=72),
-            EnemySpawn('tier_ghost', Point(1200, 2), (800, 1580), height=108),
         ),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
-        '02  뿔짐승의 도약',
-        '뿔짐승을 처치해 분신을 얻으세요. 분신으로 Space를 1초 눌러 슈퍼 점프로 발판을 올라 스위치를 누르세요.',
-        2, Point(112, 0), Point(2100, 1),
-        floor_height=800,
-        # [1·2층 통합방] 바닥이 있다. 발판 사이 높이는 90이라 보통 점프(48)로는 못 오르고
-        # 뿔짐승 분신의 슈퍼 점프(100)로만 오른다. 슈퍼 점프는 내려오며 발판 높이를 지날 때까지
-        # 최대 약 150px 날아간다. 발판은 폭 35~40으로 좁고 간격은 125~145라 끝에서 뛰고 제때 멈춰야 한다.
-        # 방향도 오른쪽·왼쪽으로 번갈아 바뀐다. 마지막 턱은 발판 끝에서 끝까지 날아야 닿는다(여유 약 10px).
-        # 오른쪽 위 턱의 스위치가 아래 잠긴 문을 연다.
-        # [3·4층 통합방] 바닥이 뚫려 있다(떨어지면 죽는다). 발판은 숨어 있고, 외눈 유령 분신의
-        # 레이더가 오른쪽 렌즈에 닿으면 모두 드러난다. 발판은 좌우로 움직여서 다음 발판이
-        # 다가오는 때를 보고 1초 먼저 모으기 시작해야 한다. 왼쪽 위 턱의 스위치가 출구 포탈을 연다.
-        platforms=(
-            Platform(0, 640, 680, 90, False), Platform(0, 790, 825, 180, False),
-            Platform(0, 700, 735, 270, False), Platform(0, 555, 590, 360, False),
-            Platform(0, 700, 735, 450, False), Platform(0, 860, 895, 540, False),
-            Platform(0, 1035, 1880, 630, False),
-            Platform(1, 1665, 1735, 90, swing=70, period=3.0),
-            Platform(1, 1485, 1555, 180, swing=80, period=2.6, phase=0.25),
-            Platform(1, 1305, 1375, 270, swing=60, period=2.2, phase=0.5),
-            Platform(1, 1125, 1195, 360, swing=90, period=3.4, phase=0.1),
-            Platform(1, 945, 1015, 450, swing=70, period=2.4, phase=0.6),
-            Platform(1, 765, 835, 540, swing=80, period=2.8, phase=0.35),
-            Platform(1, 200, 610, 630),
+        '02  거미 둥지',
+        '사냥터의 거미를 모두 쓰러뜨리세요. 거미 분신이 줄을 타고 건넌 낭떠러지에는 잠깐 거미줄 다리가 생기고, '
+        '줄을 붙인 탑의 조각상에는 밧줄이 늘어집니다(↑로 오르기).',
+        1, Point(112, 0), Point(1110, 0),
+        floor_height=800, exit_height=655,
+        # 높이 800의 둥지 한 칸. 모든 길은 거미 분신의 능력으로만 연다 (줄타기 · 거미줄 다리 · 문 타고 넘기 · 밧줄).
+        # [사냥터] 거미 둘을 모두 쓰러뜨려야 사냥 문이 열린다 (데드셀·할로우 나이트의 잠기는 전투방).
+        # [거미줄 협곡] 600px 낭떠러지. 거미 분신이 조각상 셋을 타고 건너면 그 아래 거미줄 다리가 2.5초 남는다.
+        #   거미는 건너편 A 문을 타고 넘어 A 발판을 밟고 버티고, 본체는 거미줄을 따라 건너 열린 A 문을 지난다
+        #   (트라인처럼 한쪽이 길을 열고 다른 쪽이 지나간다).
+        # [밧줄 탑] 오른쪽 아래에서 왼쪽 위로. 거미 분신이 조각상 셋을 줄을 감아 오르며 잡으면, 재현 때 조각상마다
+        #   밧줄이 6초 늘어진다 (스펠렁키의 밧줄). 본체는 밧줄로 턱 셋(185·420·655)을 올라 꼭대기 출구로 간다.
+        #   가운데 턱 왼쪽 작은 턱에는 거미 알(경험치)이 있다.
+        hunt_gates=(HuntGate(Point(600, 0), 150, 560),),
+        bridges=(EchoBridge(0, 700, 1300, life=2.5),),
+        web_beams=(WebBeam(0, 780, 900, 215), WebBeam(0, 1000, 1120, 225), WebBeam(0, 1220, 1340, 215),
+                   WebBeam(0, 1880, 2000, 215, rope=True), WebBeam(0, 1580, 1700, 450, rope=True),
+                   WebBeam(0, 1280, 1400, 685, rope=True)),
+        gates=(Gate('A', Point(1550, 0), Point(1450, 0)),),
+        platforms=(Platform(0, 1560, 1870, 185, False), Platform(0, 1260, 1600, 420, False),
+                   Platform(0, 1050, 1285, 655, False), Platform(0, 1080, 1180, 440, False)),
+        eggs=((1120, 440, 60),),
+        enemies=(
+            EnemySpawn('crawler', Point(300, 0), (220, 400)),
+            EnemySpawn('crawler', Point(460, 0), (380, 540)),
+            EnemySpawn('crawler', Point(1900, 0), (1780, 2050)),
         ),
-        pits=((1, 48, 1820),),
-        switches=(Switch(0, 1820, 630, Point(1790, 0)), Switch(1, 300, 630)),
-        lens=Lens(1, 1990, 230),
-        elevators=(Stair(1900, 0),),
-        enemies=(EnemySpawn('beast', Point(520, 0), (420, 700)),),
-        reveal_seconds=25.0,
-        echo_seconds=20,   # 발판 일곱 번을 슈퍼 점프(1초 모으기)로 오르려면 10초로는 모자라다
+        echo_seconds=12,
     ),
     Stage(
         '03  간수의 방',
@@ -334,30 +372,32 @@ STAGES = (
         1, Point(112, 0), Point(2100, 0),
         floor_height=800,
         # 공중 돌 발판(그림 assets/PixelLab/스테이지/boss_platform.png, 윗면 폭 196): 스케치대로 왼쪽 2단, 가운데, 오른쪽 2단.
-        # 대시·2단 점프를 얻는 방이라 발판을 높였다: 양옆은 낮은 단 80·높은 단 160이라 보통 점프(48)로는 못 오르고
-        # 2단 점프(약 94)로 한 단씩 오른다. 가운데(130)는 점프 + 위 대시(↑↑)로 오른다.
+        # 대시·2단 점프를 얻는 방이라 발판을 높였다: 양옆은 낮은 단 120·높은 단 240이라 점프(96)로는 못 오르고
+        # 2단 점프(약 180)로 한 단씩 오른다. 가운데(220)는 2단 점프로는 못 닿고 점프 + 위 대시(↑↑)로 오른다.
         # 발판 위(높이 30 이상)에서는 돌진을 피한다.
-        platforms=(Platform(0, 230, 426, 80, False), Platform(0, 395, 591, 160, False),
-                   Platform(0, 871, 1067, 130, False),
-                   Platform(0, 1330, 1526, 80, False), Platform(0, 1500, 1696, 160, False)),
+        platforms=(Platform(0, 230, 426, 120, False), Platform(0, 395, 591, 240, False),
+                   Platform(0, 871, 1067, 220, False),
+                   Platform(0, 1330, 1526, 120, False), Platform(0, 1500, 1696, 240, False)),
         enemies=(EnemySpawn('jailer_boss', Point(1120, 0), (1050, 1190)),),
         echo_seconds=MAX_RECORD_SECONDS,
     ),
     Stage(
         '04  염력의 하늘 땅',
-        '떠다니는 하늘 땅을 한 단씩 갈아타며 1→2→3 스위치를 순서대로 밟으세요. '
-        '마법책 분신을 녹화하는 동안 마우스로 땅을 끌어다 놓으면 잠시 멈춥니다.',
-        # [1·2·3층 통합방] 출구는 가운데 바닥에 있고 세 스위치를 순서대로 밟아야 열린다.
-        # 스위치는 벽에 붙은 작은 턱 위에 있다: 1번 왼쪽 중간(10단), 2번 왼쪽 맨 위(22단), 3번 오른쪽 위(16단).
-        # 턱까지 가는 길은 없다. 하늘 섬 21개가 1~21단에 하나씩 있고 저마다 좌우로 아무렇게나 떠다닌다.
+        '떠다니는 하늘 땅을 갈아타며 세 포털에 오르세요. 포털 너머 몬스터를 모두 처치하면 열쇠를 얻고, '
+        '열쇠 3개를 모으면 출구가 열립니다. 마법책 분신을 녹화하는 동안 마우스로 아무 땅이나 잡으면 날아오고, 놓은 땅은 잠시 멈춥니다.',
+        # [1·2·3층 통합방] 출구는 가운데 바닥에 있고 열쇠 3개를 모아야 열린다.
+        # 포털(sky.switches)은 벽에 붙은 작은 턱 위에 있다: 1번 왼쪽 아래(3단), 2번 왼쪽 위(7단), 3번 오른쪽 중간(5단).
+        # 포털을 밟으면 그 번호의 몬스터 방(SKY_ROOMS)으로 간다. 순서는 상관없다.
+        # 턱까지 가는 길은 없다. 하늘 섬 6개가 1~6단에 하나씩 있고 저마다 좌우로 아무렇게나 떠다닌다.
+        # 섬이 적어 기다리지 않도록 마법책 분신의 염력은 맵 어디의 섬이든 잡아 분신 곁으로 끌어온다.
         # 바로 윗단 섬이 가까이 올 때 뛰어 한 단씩 오른다. 마법책 분신으로 섬을 끌어다 놓으면
         # 그 자리에 몇 초(world.SKY_PIN) 멈췄다가 다시 떠다닌다. 화면은 바닥 위 1000까지 보인다.
         1, Point(1000, 0), Point(1240, 0),
         floor_height=800,
-        platforms=(Platform(0, 55, 175, SKY_STEP * 10, False), Platform(0, 55, 175, SKY_STEP * 22, False),
-                   Platform(0, 2060, 2185, SKY_STEP * 16, False)),
-        sky=SkyPuzzle(blocks=tuple((200 + 677 * i % 1840, SKY_STEP * (i + 1)) for i in range(21)),
-                      switches=((110, SKY_STEP * 10), (110, SKY_STEP * 22), (2130, SKY_STEP * 16))),
+        platforms=(Platform(0, 55, 175, SKY_STEP * 3, False), Platform(0, 55, 175, SKY_STEP * 7, False),
+                   Platform(0, 2060, 2185, SKY_STEP * 5, False)),
+        sky=SkyPuzzle(blocks=tuple((200 + 677 * i % 1840, SKY_STEP * (i + 1)) for i in range(6)),
+                      switches=((110, SKY_STEP * 3), (110, SKY_STEP * 7), (2130, SKY_STEP * 5))),
         enemies=(
             EnemySpawn('magic_book', Point(700, 0), (620, 780)),
             EnemySpawn('potion_slime', Point(450, 0), (390, 510)),
@@ -388,9 +428,9 @@ STAGES = (
         1, Point(111, 0), Point(2100, 0),
         floor_height=800,
         # 날개 달린 하늘 섬 7개(그림 assets/PixelLab/스테이지/witch_island.png, 윗면 폭 150)가 저마다 범위 안에서 떠다닌다.
-        # 높이 80·160·240 세 단이라 2단 점프(약 94)나 위 대시로 한 단씩 갈아타며 대마녀의 공격을 피한다.
+        # 높이 120·240·360 세 단이라 2단 점프(약 180)나 위 대시로 한 단씩 갈아타며 대마녀의 공격을 피한다.
         # 윗단·아랫단 범위가 겹친다.
-        sky=SkyPuzzle(blocks=((425, 80), (1100, 80), (1775, 80), (600, 160), (1600, 160), (900, 240), (1350, 240)),
+        sky=SkyPuzzle(blocks=((425, 120), (1100, 120), (1775, 120), (600, 240), (1600, 240), (900, 360), (1350, 360)),
                       switches=(), width=150,
                       lanes=((250, 600), (850, 1350), (1600, 1950), (400, 800), (1400, 1800), (700, 1100), (1150, 1550))),
         enemies=(EnemySpawn('grand_witch', Point(1120, 0), (1050, 1190)),),
@@ -479,18 +519,70 @@ STAGES = (
         ),
         echo_seconds=20,
     ),
+    Stage(
+        '04-1  사슬 뱀의 탑',
+        '사슬 뱀에 올라타면 움직입니다. 몸은 꼬리부터 사라지니 머리 쪽으로 계속 걸으세요. '
+        '2층의 뱀은 막다른 길로 가니 위를 지나는 뱀으로 갈아타고, 3층에서는 도는 뱀 맨 위에서 출구로 뛰어내리세요.',
+        # 세로로 3층인 탑. 층 사이에 계단·승강기·포털이 없고 뱀을 타야만 위층으로 간다 (분신·포털·염력 없음).
+        # 층마다 바닥은 시작 자리와 도착 자리에만 있고 사이는 낭떠러지다. 떨어지면 그 층 시작 자리로 돌아간다.
+        # [1층] 느린 뱀이 ㄱ자로 간다: 오른쪽으로 가다가 위로 꺾여 2층 오른쪽 바닥까지 올라간다. 따라 걷기만 하면 된다.
+        # [2층] 뱀 B는 왼쪽으로 가다 한 번 솟았다 내려가 막다른 곳(350)에서 끝난다. B를 타면 뱀 C도 함께 출발해
+        #       B가 솟은 윗길(높이 200, 950~600) 바로 위(높이 240)를 B 머리보다 95 앞서 지나간다.
+        #       그때 점프해 C로 갈아타면 3층 왼쪽 바닥까지 데려간다.
+        # [3층] ㅁ자로 계속 도는 빠른 뱀. 시작 바닥 끝에 서 있으면 아랫길이 지나갈 때 왼쪽 세로 몸이 태워 올라간다.
+        #       맨 윗길(330)이 오른쪽 끝에 왔을 때 출구 바닥으로 뛰어내린다. 너무 일찍 뛰면 못 닿고, 늦으면 발밑이 사라진다.
+        # 꼬리로 올라탄 뒤 머리를 따라잡는 데 (칸 수 × 66) / (걷기 230 - 뱀 속도)초가 걸리니, 위로 꺾이기 전 직선은
+        # 그동안 머리가 가는 거리보다 길게 둔다 (머리 끝에 서 있어야 세로 몸을 타고 올라간다).
+        3, Point(150, 0), Point(2100, 2),
+        floor_height=800,
+        pits=((0, 330, 2200), (1, 40, 1850), (2, 380, 1650)),
+        tower=SnakeTower(
+            snakes=(
+                Snake(0, ((340, 0), (2010, 0), (2010, 800)), speed=110),
+                Snake(1, ((1845, 0), (950, 0), (950, 200), (600, 200), (600, 0), (350, 0)), speed=120, partner=2),
+                Snake(1, ((1950, 240), (250, 240), (250, 800)), speed=120),
+                Snake(2, ((390, 0), (390, 330), (1500, 330), (1500, 0)), speed=200, cells=8, loop=True, wait=False),
+            ),
+            starts=(150, 2060, 150),
+        ),
+        echo_seconds=MAX_RECORD_SECONDS,
+    ),
+    # 하늘 땅(3) 포털 너머의 몬스터 방 셋 (SKY_ROOMS). 그림은 1·2층 통합 회랑 한 장(층별맵/3스테이지_포털방_통합배경.png).
+    # 몬스터를 모두 처치하면 열쇠를 얻고 가운데에 돌아가는 포털이 열린다.
+    # 돌 발판은 120씩 오르는 피라미드라 2단 점프(약 180)로 한 단씩 올라 꼭대기(2층 다리, 480)까지 간다. 화면은 오른 만큼 따라 올라간다.
+    *(Stage(
+        f'03-{number}  포털 너머의 회랑',
+        '몬스터를 모두 처치하면 열쇠를 얻고, 가운데에 돌아가는 포털이 열립니다.',
+        1, Point(150, 0), Point(1120, 0),
+        floor_height=800,
+        platforms=(Platform(0, 230, 426, 120, False), Platform(0, 460, 656, 240, False),
+                   Platform(0, 690, 886, 360, False), Platform(0, 920, 1120, 480, False),
+                   Platform(0, 1120, 1320, 480, False), Platform(0, 1354, 1550, 360, False),
+                   Platform(0, 1584, 1780, 240, False), Platform(0, 1814, 2010, 120, False)),
+        enemies=tuple(EnemySpawn(kind, Point(x, 0), (x - 80, x + 80)) for kind, x in spawns),
+        echo_seconds=MAX_RECORD_SECONDS,
+    ) for number, spawns in (
+        (1, (('magic_book', 600), ('potion_slime', 950), ('magic_book', 1400), ('potion_slime', 1850))),
+        (2, (('potion_slime', 550), ('magic_book', 900), ('magic_armor', 1300), ('potion_slime', 1650),
+             ('magic_book', 2000))),
+        (3, (('magic_armor', 600), ('magic_book', 900), ('potion_slime', 1250), ('magic_book', 1600),
+             ('magic_armor', 1950))),
+    )),
 )
+SKY_ROOMS = {11: 0, 12: 1, 13: 2}   # 포털 너머 방 번호 → 하늘 땅 포털 번호
 
 # One visible stage may contain multiple connected map sections.
-# 마녀의 실험 금고(9)는 나중에 더해서 맨 뒤에 있지만 4스테이지의 첫 구역이다.
-STAGE_GROUPS = ((0,), (1, 2), (3,), (9, 4, 5), (6,), (7, 8))
+# 4스테이지는 대마녀의 방(5) 하나다. 사슬 뱀의 탑(10)·마녀의 실험 금고(9)·아래층의 열쇠(4)는 4스테이지에서 뺐다
+# (구간 데이터는 남아 있지만 게임에서는 들어가지 않는다).
+STAGE_GROUPS = ((0,), (1, 2), (3,), (5,), (6,), (7, 8))
 STAGE_TITLES = (
     '01  잔향의 문', '02  사냥꾼과 간수', '03  염력의 하늘 땅',
-    '04  격리실과 대마녀', '05  두 번째 잔향', '06  마지막 잔향',
+    '04  대마녀의 방', '05  두 번째 잔향', '06  마지막 잔향',
 )
 
 
 def stage_group_index(section_index):
+    section_index = 3 if section_index in SKY_ROOMS else section_index   # 포털 너머 방은 하늘 땅 스테이지에 속한다
     return next(i for i, group in enumerate(STAGE_GROUPS) if section_index in group)
 
 

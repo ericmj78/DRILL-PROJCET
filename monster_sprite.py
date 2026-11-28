@@ -1,4 +1,4 @@
-"""도트 몬스터(거미, 외눈 유령, 마법책, 물약 슬라임, 뿔짐승, 쇠사슬 간수, 대마녀) 시트를 그린다. 시트는 PixelLab으로 만든다 (assets/PixelLab/몬스터).
+"""도트 몬스터(거미, 외눈 유령, 마법책, 물약 슬라임, 뿔짐승, 쇠사슬 간수, 대마녀, 잔향의 기사) 시트를 그린다. 시트는 PixelLab으로 만든다 (assets/PixelLab/몬스터).
 
 원본 그림은 왼쪽을 보므로 오른쪽을 볼 때 뒤집는다. 그림 한 칸 = 화면 1px.
 떠도는 유령은 외눈 유령 시트를 작게, 보랏빛 반투명으로 그린다.
@@ -34,8 +34,11 @@ GRAND_WITCH = {'sheet': 'PixelLab/몬스터/grand_witch', 'size': (256, 176), 'f
 # 대마녀 2페이즈(pixellab_witch_broom.py): 빗자루 타기 8(바닥에 선 채 시작해 떠오른다) / 비행 8 / 빗자루 공격 8.
 # 칸과 발밑은 대마녀 시트와 같아서, 탄 자세는 발밑보다 54px(27칸 × 2) 위에 그려진다.
 BROOM = {**GRAND_WITCH, 'sheet': 'PixelLab/몬스터/grand_witch_broom'}
-WALKERS = frozenset(('crawler', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
-ANYWHERE = frozenset(('magic_book', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
+# 최종 보스 뒤틀린 잔향의 기사(pixellab_knight.py): 같은 줄 배치, 기술은 돌진·마력 구체·낙뢰. 2배로 그린다.
+KNIGHT = {'sheet': 'PixelLab/몬스터/echo_knight', 'size': (256, 176), 'feet': 170, 'center': 138, 'scale': 2,
+          'skills': {'charge': 3, 'orb': 4, 'bolts': 5, 'skulls': 4, 'wisps': 5, 'hands': 5, 'pillar': 5}}
+WALKERS = frozenset(('crawler', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch', 'echo_knight'))   # 걷기·공격·대기 줄을 쓰는 몬스터 (나머지는 떠다니기 16칸)
+ANYWHERE = frozenset(('crawler', 'magic_book', 'potion_slime', 'beast', 'jailer_boss', 'grand_witch', 'echo_knight'))   # 1스테이지 밖에서도 이 시트를 쓰는 몬스터
 
 
 def attack_frame(windup, recovery):
@@ -59,7 +62,7 @@ def skill_frame(phase, progress):
 class MonsterSprite:
     def __init__(self, load):
         self.meta = dict(crawler=SPIDER, watcher=WATCHER, magic_book=BOOK, potion_slime=SLIME, beast=BEAST,
-                         jailer_boss=JAILER, grand_witch=GRAND_WITCH, grand_witch_broom=BROOM)
+                         jailer_boss=JAILER, grand_witch=GRAND_WITCH, grand_witch_broom=BROOM, echo_knight=KNIGHT)
         self.sheets = {(kind, echo): load(f'{info["sheet"]}{"_echo" if echo else ""}.png')
                        for kind, info in self.meta.items() for echo in (False, True)}
         for image in self.sheets.values():   # 2배로 키우는 보스도 도트가 흐려지지 않게

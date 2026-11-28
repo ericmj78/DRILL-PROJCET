@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field, replace
-from math import asin, atan2, cos, hypot, pi, sin
+from math import asin, atan2, cos, hypot, pi, sin, sqrt
 import random
 
 import boss_skills
-from stages import HAZARD_RATIO, LEVEL_UP_XP, attack_power, max_health
+import chain_snake
+from stages import HAZARD_RATIO, LEVEL_UP_XP, POISON_DEPTH, attack_power, max_health
 
 WATCH_RANGE = 170   # 분신이 감시등의 focus에서 이만큼 안에 있으면 빛이 분신을 따라간다.
 TAUNT_OFFSET = 35   # 수호자 앞 도발 발판까지의 거리
@@ -11,11 +12,14 @@ LIGHT_BELOW = 100   # 위층 분신의 빛이 아래층을 비추는 반폭
 from stages import (
     ACTOR_RADIUS, BOSS_KINDS, DOOR_GRACE, ENEMY_KINDS,
     GATE_HALF_WIDTH, LEFT, MOVE_SPEED,
-    PLATE_RANGE, RIGHT, STAIR_RANGE, STAGES, STEP, WEAPONS, EnemySpawn, Point,
+    PLATE_RANGE, RIGHT, SKY_ROOMS, STAIR_RANGE, STAGES, STEP, WEAPONS, EnemySpawn, Point,
 )
 
 JUMP_DURATION = 0.64
 JUMP_HEIGHT = 48  # 49를 넘으면 슈퍼 점프(100)가 보통 점프의 두 배가 안 된다
+# 보스방(간수·대마녀)과 하늘 땅(+ 포털 너머 방)은 두 배로 높이 뛴다. 체공 시간은 높이의 제곱근만큼 늘린다.
+# 이 방들의 발판·섬 높이도 이에 맞춰 올렸다 (보스방·포털 방은 1.5배, 하늘 땅 한 단은 두 배). 1·2스테이지 퍼즐은 보통 점프(48)에 맞춰져 있어 그대로 둔다.
+HIGH_JUMP_SECTIONS, HIGH_JUMP_HEIGHT = (2, 3, 5, 11, 12, 13), 96
 BEAST_JUMP_DURATION = 1.0
 BEAST_JUMP_HEIGHT = 100
 BEAST_CHARGE_SECONDS = 1.0
@@ -23,6 +27,7 @@ BEAST_CHARGE_SECONDS = 1.0
 SKY_SPEED = (60.0, 110.0)  # px/s
 SKY_WALL_BIAS = 300        # 목표를 맵 밖까지 뽑고 벽에서 자른다: 벽 턱 옆에 섬이 더 자주 머문다
 SKY_PIN = 15.0
+SKY_FLY = 1200.0   # px/s. 염력으로 잡은 땅이 마우스 쪽으로 날아오는 빠르기 (멀리서 잡아도 금방 온다)
 ELEVATOR_DURATION = 0.8
 ENEMY_CHASE_MARGIN = 400
 ECHO_DAMAGE_RATIO = 0.30
@@ -42,6 +47,13 @@ SPIDER_MAX_ANGLE = 1.35    # 줄이 수직에서 벌어질 수 있는 최대 각
 SPIDER_OVER_HEIGHT = 125   # 이 높이 이상이면 문과 벽 위로 넘어간다
 SPIDER_DOOR_CLIMB_DURATION = 1.2
 SPIDER_DOOR_CLIMB_HEIGHT = 145
+# 거미 밧줄: 재현 중인 거미 분신이 rope 조각상에 줄을 붙이면 그 자리에서 바로 아래 바닥(발판)까지 줄이 늘어져
+# ROPE_LIFE초 남는다. 본체는 줄 옆에서 ↑로 붙잡아(뛰는 중에도) ↑↓로 오르내리고 Space로 뛰어내린다. 줄이 끊어지면 떨어진다.
+ROPE_LIFE = 6.0
+ROPE_CLIMB = 150           # px/s
+ROPE_GRAB = 18             # 줄에서 이만큼 안이면 붙잡는다
+ROPE_TOP = 60              # 조각상 아랫면에서 이만큼 아래까지 오른다
+EGG_REACH = 26             # 거미 알을 줍는 거리
 FALL_GRAVITY = 820         # 예전 보통 점프(높이 42, 0.64초)에 맞춘 낙하 중력
 PIT_DEPTH = 90             # 구덩이로 이만큼 떨어지면 죽는다
 RADAR_RANGE = 220          # 외눈 유령 분신의 눈에서 발판이 드러나는 거리
@@ -66,6 +78,11 @@ DASH_COOLDOWN = 0.55
 BROOM_MOUNT = 1.0          # 타는 연출 시간 (grand_witch_broom 시트 0줄 8칸)
 BROOM_HEIGHT = 110         # 나는 높이. 하늘 섬(90·135)이나 2단 점프로 올라가야 벨 수 있다
 BROOM_DIVE, BROOM_RISE = 420, 180   # 기본 공격 때 본체 쪽으로 급강하하는 속도, 다시 떠오르는 속도 (px/s)
+# 보스를 처치하면 출구에 포털이 열린다. PULL_RANGE 안에 들어오면 빨려 들어가고(가까울수록 빠르다),
+# 가운데에 닿으면 ABSORB_SECONDS 동안 빨려 들어간 뒤 클리어.
+PULL_RANGE = 260
+PULL_SPEED = (50.0, 340.0)  # 가장자리, 가운데 바로 앞의 당기는 속도 (px/s). 걸음은 230
+ABSORB_SECONDS = 0.8
 SKILL_UNLOCK_SECONDS = 2.4  # 처음 쓸 수 있게 된 구역에서 능력 획득 알림판(pixelfx ui/achievement)이 보이는 시간
 
 
@@ -124,6 +141,7 @@ class Actor:
     dash_vy: float = 0.0
     air_jumped: bool = False      # 공중에서 2단 점프를 이미 썼다
     air_dashed: bool = False      # 공중에서 대시를 이미 썼다
+    rope: list | None = None      # 붙잡고 있는 거미 밧줄 (World.ropes의 한 줄)
 
     @property
     def elevator_offset(self):
@@ -207,9 +225,13 @@ class Enemy:
     skill_cooldown: float = 0
     skill_index: int = 0
     boss_engaged: bool = False  # 보스가 본체를 한 번 발견했는지
+    boss_appeared: bool = False  # 등장 음악을 이미 틀었는지
     broom: float | None = None  # 대마녀가 빗자루에 오른 뒤 지난 시간 (None = 아직 걸어 다님)
     laser_h: float = 0.0        # 마력 광선이 지나가는 높이
     teleport_to: float = 0.0    # 빗자루 대마녀가 순간이동할 x (본체 너머)
+    mark_x: float = 0.0         # 잔향 기사의 그림자 손이 솟을 자리
+    phase: int = 1              # 잔향 기사의 단계 (boss_skills.update_phase)
+    phase_time: float = 0.0     # 단계가 오르는 연출이 남은 시간. 그동안 무적
 
 
 def approach_direction(start: float, end: float) -> int:
@@ -217,6 +239,8 @@ def approach_direction(start: float, end: float) -> int:
 
 
 class World:
+    god = False   # O 키 무적(시험 플레이용). 클래스에 두어 스테이지를 다시 만들어도 이어진다
+
     def __init__(self, index: int = 0, weapon_index: int = 2, xp: int = 0,
                  monster_echo: str | None = None, monster_echoes=None):
         self.xp = xp  # 스테이지를 넘어가도 이어지는 누적 경험치
@@ -238,10 +262,15 @@ class World:
         self.revealed = set()   # 레이더로 드러난 숨은 발판 번호
         self.lens_lit = False   # 렌즈가 켜져 그 층 발판이 모두 드러났는가
         self.switched = [False] * len(self.stage.switches)   # 눌려 문이 열린 스위치
+        self.ferry_clock = [0.0] * len(self.stage.platforms)   # 나룻배 발판이 처음 자리에서 간 시간 (Platform.switch)
         sky = self.stage.sky
         self.sky_blocks = [list(block) for block in sky.blocks] if sky else []   # 하늘 땅 [x, 높이]
-        self.sky_progress = 0      # 순서대로 눌린 하늘 스위치 수
-        self.sky_on = None         # 본체가 지금 밟고 있는 하늘 스위치 (한 번 밟을 때 한 번만 판정)
+        tower = self.stage.tower   # 사슬 뱀마다 [머리 자리(길을 따라 잰 거리), 움직이는 중인가]
+        self.snake_state = [[chain_snake.start_head(snake), not snake.wait] for snake in tower.snakes] if tower else []
+        self.sky_keys = set()      # 포털 너머 방을 깨고 얻은 열쇠 (포털 번호)
+        self.sky_on = None         # 본체가 지금 밟고 있는 하늘 포털 (한 번 밟을 때 한 번만 판정)
+        self.room_request = None   # 밟은 하늘 포털이 보내는 몬스터 방 번호 (main이 방으로 바꾼다)
+        self.parent = None         # 포털 너머 방이면 돌아갈 하늘 땅 World
         self.sky_hold = None       # 마법책 분신이 염력으로 잡은 땅 번호
         self.sky_target = (0.0, 0.0)
         self.sky_rng = random.Random(index)   # 스테이지마다 같은 순서로 떠다니게 (테스트가 재현되도록)
@@ -267,9 +296,15 @@ class World:
         self.boss_effects = []  # 보스 스킬 이펙트 (boss_skills.Effect)
         self.gravity_field = None
         self.shake = 0.0        # 화면을 흔드는 남은 시간
+        self.sounds = []        # 이번 프레임에 낼 효과음 이름 (sound.py가 틀고 비운다)
         self.confused = 0.0     # 낙석에 맞아 기절한 남은 시간. 머리 위에 혼란(pixelfx status/confused)이 돈다
         self.level_up_time = 0.0  # 레벨 업 이펙트가 남은 시간
+        self.flash_color, self.flash_time = (255, 255, 255), 0.0   # 보스 스킬이 터질 때 화면이 번쩍이는 색과 남은 시간
+        self.portal_opened_at = None  # 보스를 처치해 출구 포털이 열린 시각
+        self.absorb_time = 0.0        # 포털에 빨려 들어가는 중이면 0보다 크다
         self.moves = index not in NO_MOVES_SECTIONS   # 대시·2단 점프를 쓸 수 있는가
+        self.jump_peak = HIGH_JUMP_HEIGHT if index in HIGH_JUMP_SECTIONS else JUMP_HEIGHT   # 본체·분신의 점프 높이
+        self.jump_duration = JUMP_DURATION * sqrt(self.jump_peak / JUMP_HEIGHT)
         self.skill_unlock_time = SKILL_UNLOCK_SECONDS if index == 2 else 0.0
         self.time = 0.0
         self.result = 'playing'
@@ -283,8 +318,9 @@ class World:
         self.watch_active = False
         self.isolation_closed = False
         self.isolation_changed_at = -9.0     # 격리실 철창이 마지막으로 움직인 시각 (떨어지는 연출용)
-        bridge = self.stage.bridge
-        self.bridge_tiles = [0.0] * (-(-(bridge.right - bridge.left) // bridge.tile)) if bridge else []
+        self.bridge_tiles = [[0.0] * -(-(bridge.right - bridge.left) // bridge.tile) for bridge in self.stage.bridges]
+        self.ropes = []   # [층, x, 아래 높이, 위 높이, 남은 시간, 조각상 번호]
+        self.eggs = list(self.stage.eggs)   # 아직 줍지 않은 거미 알
         self._update_doors(0)
         if self.skill_unlock_time:
             self.notify('새 능력! ←→ 두 번 연타로 대시, 공중에서 Space로 2단 점프')
@@ -378,17 +414,14 @@ class World:
             self.recording = Recording(start, facing, preview, monster_kind=monster_kind,
                                        clock=clock, base=self.player.base)
             self._update_doors(0)
-            self.notify('마우스로 분신 둘레의 하늘 땅을 끌어 길을 만드세요.' if self._sky_book()
-                        else 'F를 누르고 있다가 떼면 물약을 던집니다. 두 병이 포털 한 쌍이 됩니다.'
-                        if monster_kind == 'potion_slime'
-                        else '분신으로 이동하고 필요한 자리에서 기다리세요.')
 
     @property
     def pending_monster_echo(self):
         return self.pending_monster_echoes[0] if self.pending_monster_echoes else None
 
     def offer_monster_echo(self, kind):
-        if kind in BOSS_KINDS or kind == 'tier_ghost':
+        # 능력은 스테이지 둘마다 하나다. 뿔짐승은 2스테이지에 나와 싸우기만 하고 분신이 되지 않는다.
+        if kind in BOSS_KINDS or kind in ('tier_ghost', 'beast'):
             return
         # The guard and regular armor share the same monster form.
         kind = 'magic_armor' if kind == 'magic_armor_guard' else kind
@@ -416,7 +449,6 @@ class World:
         if self.recording is not None:
             self._clear_actor_target(self.recording.preview)
             self.recording = None
-            self.notify('녹화를 취소했습니다.')
 
     def _finish_recording(self, time_limit: bool = False):
         record = self.recording
@@ -424,19 +456,19 @@ class World:
         if record is not None:
             self._clear_actor_target(record.preview)
         if record is None or not record.inputs:
-            self.notify('분신이 재현할 녹화가 비어 있어요.')
             return
         self._remove_echo()
         actor = Actor.at(record.start, record.facing)
         actor.base = record.base   # 섬이 떠나 버렸으면 그 자리에서 떨어진다
         self.echo = Echo(actor, tuple(record.inputs), monster_kind=record.monster_kind, clock=record.clock)
         self._update_doors(0)
-        self.notify('녹화 상한에 도달해 재현을 시작합니다.' if time_limit else '본체 조작 재개 · 분신이 재현합니다.')
 
     def step(self, motion: Motion = Motion(), attack: str | bool = False):
         if self.result != 'playing' or self.echo_selecting or self.pending_monster_echo:
             return
         self.message_time = max(0, self.message_time - STEP)
+        self._update_snakes()
+        self._update_ferries()
         recording = self.recording
         if recording is not None:
             preview = recording.preview
@@ -463,6 +495,7 @@ class World:
         self.shake = max(0, self.shake - STEP)
         self.confused = max(0, self.confused - STEP)
         self.level_up_time = max(0, self.level_up_time - STEP)
+        self.flash_time = max(0, self.flash_time - STEP)
         self.skill_unlock_time = max(0, self.skill_unlock_time - STEP)
         for text in self.damage_texts:
             text[2] += STEP
@@ -475,8 +508,8 @@ class World:
             self._apply_attack()
         player_x, player_floor = self.player.x, self.player.floor
         if recording is None and not (self.gravity_field and self.gravity_field.captured):
-            # 낙석에 맞아 기절한 동안은 입력을 받지 않는다 (하던 점프·낙하는 이어진다).
-            self._move(self.player, Motion() if self.confused > 0 else motion)
+            # 낙석에 맞아 기절했거나 포털에 빨려 들어가는 동안은 입력을 받지 않는다 (하던 점프·낙하는 이어진다).
+            self._move(self.player, Motion() if self.confused > 0 or self.absorb_time else motion)
             self._block_body(player_x, player_floor)
         elif recording is not None:
             self.player.moving = False
@@ -485,11 +518,11 @@ class World:
             return
         for floor, left, right in self.stage.poison_zones:
             if (self.player.floor == floor and left <= self.player.x <= right
-                    and self.player.elevator_target is None and self.player.jump_height < 12):
+                    and self.player.elevator_target is None and self.player.jump_height < 12 - POISON_DEPTH):
                 self.hurt(max(1, round(self.max_health * HAZARD_RATIO)), '독에 닿았습니다!')
             for actor in self.echo_actors():
                 if (actor.floor == floor and left <= actor.x <= right
-                        and actor.elevator_target is None and actor.jump_height < 12):
+                        and actor.elevator_target is None and actor.jump_height < 12 - POISON_DEPTH):
                     self.hurt_echo(actor, max(1, round(self.max_health * HAZARD_RATIO)))
         for hazard in self.stage.hidden_hazards:
             # 분신의 빛이 닿지 않은 함정은 뛰어넘을 수도 없다. 무작정 점프로는 통과하지 못한다.
@@ -499,6 +532,8 @@ class World:
                 self._move_x(self.player, 70 if player_x > hazard.x else -70)
                 self.hurt(max(1, round(self.max_health * HAZARD_RATIO)),
                           '숨겨진 함정입니다! 분신 곁에서 위치를 보고 뛰어넘으세요.')
+                self.sounds.append('trap')
+                self.notify('숨겨진 함정입니다! 분신 곁에서 위치를 보고 뛰어넘으세요.')
                 if self.result != 'playing':
                     return
         if recording is None and attack and self.attack_cooldown == 0 and self.confused == 0:
@@ -512,26 +547,27 @@ class World:
             self.echo.cursor += 1
             if self.echo.cursor == len(self.echo.inputs):
                 self._remove_echo()
-                self.notify('분신의 재현이 끝났습니다.')
 
         self._update_reveal()
         self._update_switches()
         self._update_sky()
         self._update_potions()
         self._update_portals()
-        if self.player.base < -PIT_DEPTH:
+        if self.player.base < -PIT_DEPTH and self.stage.tower:
+            self._fall_back_to_floor_start()   # 사슬 뱀의 탑: 아래층으로 떨어지지 않고 이 층 시작 자리로 돌아간다
+        elif self.player.base < -PIT_DEPTH:
             self.invulnerable = 0
             self.hurt(self.health, '구덩이에 떨어졌습니다!')
             return
         if self.recording is not None and self.recording.preview.base < -PIT_DEPTH:
             self.cancel_recording()
-            self.notify('분신이 구덩이에 떨어졌습니다.')
         if self.echo is not None and self.echo.actor.base < -PIT_DEPTH:
             self._remove_echo()
-            self.notify('분신이 구덩이에 떨어졌습니다.')
 
         self._update_sync()
         self._update_bridge()
+        self._update_ropes()
+        self._update_eggs()
         if self.result != 'playing':
             return
         self._update_watch()
@@ -551,23 +587,51 @@ class World:
             self._finish_recording(time_limit=True)
         if self.pending_monster_echo:
             return
-        if self._near(self.player, self.stage.exit, 27):
+        if self.portal_opened_at is not None and recording is None:
+            self._pull_into_portal()
+            return
+        if self._near(self.player, self.stage.exit, 27) and abs(self.player.base - self.stage.exit_height) < 1:
             if any(enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies):
                 if self.message_time <= 0:
                     self.notify('보스를 처치하면 출구가 열립니다.')
-            elif self.stage.sky and self.sky_progress < len(self.stage.sky.switches):
+            elif self.index in SKY_ROOMS:
+                pass   # 포털 너머 방은 몬스터를 다 잡으면 열리는 포털로만 나간다
+            elif self.stage.sky and len(self.sky_keys) < len(self.stage.sky.switches):
                 # 벽 문은 높이 125 위로 넘을 수 있어 하늘 땅 계단으로 넘지 못하게 출구 자체를 잠근다.
                 if self.message_time <= 0:
-                    self.notify('1→2→3 스위치를 순서대로 밟아야 출구가 열립니다.')
+                    self.notify(f'열쇠 3개를 모아야 출구가 열립니다. (지금 {len(self.sky_keys)}개)')
             elif not self.portal_open:
                 pass   # 포탈 스위치를 누르기 전엔 출구 자리가 비어 있다
             else:
                 self.result = 'cleared'
 
+    def _pull_into_portal(self):
+        """보스방 출구 포털: 가까이 오면 끌어당기고, 가운데에 닿으면 빨려 들어가 클리어한다."""
+        player, portal = self.player, self.stage.exit
+        if self.absorb_time:
+            self.absorb_time += STEP
+            if self.absorb_time >= ABSORB_SECONDS:
+                self.result = 'cleared'
+            return
+        # 포털(높이 약 220) 위를 지나는 하늘 섬에 서 있으면 끌어당기지 않는다
+        if player.floor != portal.floor or player.elevator_target is not None or player.jump_height > 200:
+            return
+        gap = portal.x - player.x
+        if abs(gap) <= 20:
+            self.absorb_time = STEP
+            self.invulnerable = ABSORB_SECONDS + 1
+            self.notify('포털에 빨려 들어갑니다!')
+        elif abs(gap) <= PULL_RANGE:
+            closeness = 1 - abs(gap) / PULL_RANGE
+            pull = PULL_SPEED[0] + (PULL_SPEED[1] - PULL_SPEED[0]) * closeness * closeness
+            self._move_x(player, (1 if gap > 0 else -1) * min(abs(gap), pull * STEP))
+
     @property
     def portal_open(self) -> bool:
         """문 없는 스위치(출구 포탈 스위치)가 모두 눌렸는가. 그런 스위치가 없으면 늘 열려 있다."""
-        return all(on for switch, on in zip(self.stage.switches, self.switched) if switch.door is None)
+        ferries = {platform.switch for platform in self.stage.platforms if platform.switch is not None}
+        return all(on for index, (switch, on) in enumerate(zip(self.stage.switches, self.switched))
+                   if switch.door is None and index not in ferries)
 
     def warp_to_boss(self):
         """본체를 보스가 있는 층의 입구(그 층으로 올라오는 사다리·승강기)로 옮긴다. B 키용."""
@@ -586,7 +650,9 @@ class World:
             self.notify('분신 녹화 중에는 층을 옮길 수 없습니다.')
             return False
         entries = [stair.x for stair in self.stage.elevators + self.stage.stairs if stair.lower == floor - 1]
-        if entries:
+        if self.stage.tower:
+            x = self.stage.tower.starts[floor]
+        elif entries:
             x = entries[0]
         elif self.stage.start.floor == floor:
             x = self.stage.start.x
@@ -614,11 +680,17 @@ class World:
             return None
         return Point(guard.x - TAUNT_OFFSET, guard.floor)
 
-    def bridge_tile_at(self, x: float) -> int | None:
-        bridge = self.stage.bridge
-        if bridge is None or not bridge.left < x < bridge.right:
-            return None
-        return min(len(self.bridge_tiles) - 1, int((x - bridge.left) // bridge.tile))
+    def bridge_tile_at(self, floor: int, x: float) -> tuple[int, int] | None:
+        """그 자리의 거미줄 다리 (다리 번호, 칸 번호). 다리 밖이면 None."""
+        for index, bridge in enumerate(self.stage.bridges):
+            if bridge.floor == floor and bridge.left < x < bridge.right:
+                return index, min(len(self.bridge_tiles[index]) - 1, int((x - bridge.left) // bridge.tile))
+        return None
+
+    def hunt_open(self, gate) -> bool:
+        """사냥 문: 그 구역에서 나온 몬스터가 모두 쓰러졌는가."""
+        return not any(enemy.spawn.point.floor == gate.door.floor and gate.left <= enemy.spawn.point.x <= gate.right
+                       for enemy in self.enemies)
 
     def _block_body(self, x: float, floor: int):
         # 처치 불가 적은 본체가 몸으로 지나갈 수 없다. 분신으로 유인하거나 다른 층으로 돌아간다.
@@ -656,6 +728,9 @@ class World:
         for switch, on in zip(self.stage.switches, self.switched):
             if not on and switch.door and switch.door.floor == floor:
                 yield switch.door.x
+        for gate in self.stage.hunt_gates:
+            if gate.door.floor == floor and not self.hunt_open(gate):
+                yield gate.door.x
 
     def _spider_surfaces(self, floor):
         # 충돌 가능한 문과 벽만 사용한다. 경비 몬스터와 배경 무늬는 제외한다.
@@ -694,7 +769,7 @@ class World:
                           462 * 400 / 231 + 400, 462 * 400 / 231 + 400 + 235 * 400 / 231)
                 ceiling = levels[actor.floor + 1] - levels[actor.floor] - 35
             else:
-                ceiling = 365
+                ceiling = self.stage.floor_height - 35
             distance = (ceiling - origin_y) / dy
             if 0 < distance <= SPIDER_AIM_REACH and LEFT <= origin_x + dx * distance <= RIGHT:
                 hits.append((distance, origin_x + dx * distance, ceiling))
@@ -810,6 +885,8 @@ class World:
 
     def platform_span(self, index: int, clock: float | None = None) -> tuple[float, float]:
         platform = self.stage.platforms[index]
+        if platform.switch is not None:   # 나룻배 발판은 제 시계로 움직인다
+            clock = self.ferry_clock[index]
         shift = platform.shift(self.platform_clock() if clock is None else clock)
         return platform.left + shift, platform.right + shift
 
@@ -819,20 +896,45 @@ class World:
             return
         clock = self.platform_clock()
         for index, platform in enumerate(self.stage.platforms):
-            if (platform.swing and platform.floor == actor.floor and platform.height == actor.base
-                    and self.platform_visible(index)):
+            if (platform.swing and platform.switch is None and platform.floor == actor.floor
+                    and platform.height == actor.base and self.platform_visible(index)):
                 left, right = self.platform_span(index, clock - STEP)
                 if left <= actor.x <= right:
                     actor.x += platform.shift(clock) - platform.shift(clock - STEP)
                     return
 
+    def _update_ferries(self):
+        """나룻배 발판: 스위치가 눌린 뒤 누가 올라서 있으면 건너편으로 가고(위에 선 사람도 함께), 비면 돌아온다."""
+        actors = [self.player, *self.echo_actors()]
+        for index, platform in enumerate(self.stage.platforms):
+            if platform.switch is None:
+                continue
+            left, right = self.platform_span(index)
+            riders = [actor for actor in actors
+                      if actor.floor == platform.floor and actor.jump_time == 0 and not actor.fall_speed
+                      and actor.base == platform.height and left <= actor.x <= right]
+            clock = self.ferry_clock[index]
+            if riders and self.switched[platform.switch]:
+                clock = min(platform.period / 2, clock + STEP)
+            elif not riders:
+                clock = max(0.0, clock - STEP)
+            dx = platform.shift(clock) - platform.shift(self.ferry_clock[index])
+            for actor in riders:
+                actor.x += dx
+            self.ferry_clock[index] = clock
+
     def _over_pit(self, floor: int, x: float) -> bool:
-        return any(pit_floor == floor and left < x < right for pit_floor, left, right in self.stage.pits)
+        return any(pit_floor == floor and left < x < right for pit_floor, left, right in self.stage.chasms)
 
     def _ground_heights(self, actor: Actor):
         """actor가 지금 x에서 설 수 있는 높이들. 구덩이 밖 바닥(0)과 보이는 발판."""
-        if not self._over_pit(actor.floor, actor.x):
-            yield 0.0
+        if not self._over_pit(actor.floor, actor.x):   # 독 웅덩이 안은 바닥이 수면 높이로 가라앉아 있다
+            poisoned = any(floor == actor.floor and left <= actor.x <= right
+                           for floor, left, right in self.stage.poison_zones)
+            yield -float(POISON_DEPTH) if poisoned else 0.0
+        elif actor is self.player and (spot := self.bridge_tile_at(actor.floor, actor.x)):
+            if self.bridge_tiles[spot[0]][spot[1]] > 0:
+                yield 0.0   # 거미줄 다리: 본체만 거미줄 위를 걷는다
         for index, platform in enumerate(self.stage.platforms):
             if platform.floor == actor.floor and self.platform_visible(index):
                 left, right = self.platform_span(index)
@@ -843,6 +945,74 @@ class World:
             for x, height in self.sky_blocks:
                 if abs(actor.x - x) <= half:
                     yield float(height)
+        if self.stage.tower:
+            for snake, (head, _) in zip(self.stage.tower.snakes, self.snake_state):
+                if snake.floor == actor.floor:
+                    for _, left, right, height in chain_snake.surfaces(snake, head):
+                        if left <= actor.x <= right:
+                            yield float(height)
+
+    def _snake_under(self, actor: Actor):
+        """actor가 딛고 선 사슬 뱀 면: (뱀 번호, 길 조각 번호) 또는 None.
+        모서리에서 두 조각의 면이 겹치면 길에서 뒤쪽 조각을 고른다: 머리가 위로 꺾이면 그 세로 몸을 타고 함께 올라간다."""
+        if actor.jump_time > 0 or actor.fall_speed or actor.elevator_target is not None:
+            return None
+        found = None
+        for index, (snake, (head, _)) in enumerate(zip(self.stage.tower.snakes, self.snake_state)):
+            if snake.floor != actor.floor:
+                continue
+            for piece, left, right, height in chain_snake.surfaces(snake, head):
+                if left <= actor.x <= right and abs(actor.base - height) < 0.5 and (found is None or piece > found[1]):
+                    found = index, piece
+        return found
+
+    def _start_snake(self, index: int):
+        snake = self.stage.tower.snakes[index]
+        if not self.snake_state[index][1]:
+            self.snake_state[index][1] = True
+            self.sounds.append('chain')
+            self.notify('사슬 뱀이 움직입니다! 꼬리부터 사라지니 머리 쪽으로 걸으세요.')
+        if snake.partner is not None:
+            self.snake_state[snake.partner][1] = True
+
+    def _update_snakes(self):
+        """사슬 뱀을 한 스텝 움직인다. 올라탄 뱀은 출발하고, 오르내리는 세로 몸 위에 선 본체·분신은 함께 오르내리며,
+        층 높이까지 올라가면 위층 바닥으로 넘어간다."""
+        tower = self.stage.tower
+        if tower is None:
+            return
+        riders = [actor for actor in (self.player, self.recording.preview if self.recording else None,
+                                      self.echo.actor if self.echo else None) if actor is not None]
+        spots = [self._snake_under(actor) for actor in riders]
+        for spot in spots:
+            if spot is not None:
+                self._start_snake(spot[0])
+        for snake, state in zip(tower.snakes, self.snake_state):
+            if state[1]:
+                state[0] += snake.speed * STEP
+        for actor, spot in zip(riders, spots):
+            if spot is None:
+                continue
+            # 이 뱀에서 두 스텝 안에 오르내린 면 가운데 가장 높은 면에 선다: 머리가 위로 꺾이면 그 세로 몸을 타고 오르고,
+            # 꼬리가 세로 몸을 내려가면 함께 내려간다. 그런 면이 없으면 (발밑이 사라졌으면) 떨어진다.
+            snake = tower.snakes[index := spot[0]]
+            reach = 2 * snake.speed * STEP + 0.5   # 처음 닿는 프레임에 세로 몸이 이미 한 스텝 올라가 있을 수 있다
+            heights = [height for _, left, right, height in chain_snake.surfaces(snake, self.snake_state[index][0])
+                       if left <= actor.x <= right and abs(height - actor.base) <= reach]
+            if heights:
+                actor.base = float(max(heights))
+            if actor.base >= self.stage.floor_height - 0.5 and actor.floor + 1 < self.stage.floors:
+                actor.floor += 1
+                actor.base = max(0.0, actor.base - self.stage.floor_height)   # 위층 바닥에 딱 맞춰 선다
+
+    def _fall_back_to_floor_start(self):
+        floor = self.player.floor
+        self.player = Actor(self.stage.tower.starts[floor], floor, 1)
+        for snake, state in zip(self.stage.tower.snakes, self.snake_state):
+            if snake.floor == floor:
+                state[:] = [chain_snake.start_head(snake), not snake.wait]
+        self.sounds.append('hurt')
+        self.notify('떨어졌습니다! 이 층 시작 자리로 돌아가고 뱀도 처음 자리에서 다시 기다립니다.')
 
     def _end_jump(self, actor: Actor):
         """점프 포물선이 끝났다. 발판에서 뛰어 디딜 곳이 없으면 포물선 끝의 내려오던 속도로 이어서 떨어진다
@@ -850,28 +1020,38 @@ class World:
         actor.jump_time = 0.0
         if actor.base not in self._ground_heights(actor):
             actor.fall_speed = 4 * actor.jump_peak / actor.jump_duration
+        elif actor is self.player:
+            self.sounds.append('land')
 
     def _settle(self, actor: Actor, before: float):
         """발판 착지와 낙하. 점프가 내려오다 발판 높이를 지나면 그 위에 선다."""
         # 발판 없는 방이라도 2단 점프로 공중에 떠 있으면(base > 0) 바닥까지 떨어뜨린다.
-        if (not self.stage.pits and not self.stage.platforms and not self.stage.sky
+        if (not self.stage.chasms and not self.stage.platforms and not self.stage.sky and not self.stage.poison_zones
                 and actor.base == 0 and not actor.fall_speed) or actor.elevator_target is not None \
                 or (actor.dash_time > 0 and actor.dash_vy > 0) \
-                or actor.web_time > 0 or actor.door_climb_time > 0:
+                or actor.web_time > 0 or actor.door_climb_time > 0 or actor.rope is not None:
             return
         if actor.jump_time > 0:
             now = actor.jump_height
             landing = [height for height in self._ground_heights(actor) if now <= height <= before]
             if now < before and landing:
                 actor.base, actor.jump_time, actor.beast_super_jump = max(landing), 0.0, False
+                if actor is self.player:
+                    self.sounds.append('land')
             return
         if actor.fall_speed == 0 and actor.base in self._ground_heights(actor):
+            return
+        if (actor.fall_speed == 0 and -POISON_DEPTH - 0.5 <= actor.base < 0
+                and 0.0 in self._ground_heights(actor)):
+            actor.base = 0.0   # 가라앉은 독 웅덩이에서 바닥으로 걸어 나오면 턱을 딛고 올라선다
             return
         actor.fall_speed += FALL_GRAVITY * STEP
         below = actor.base - actor.fall_speed * STEP
         landing = [height for height in self._ground_heights(actor) if below <= height <= actor.base]
         if landing:
             actor.base, actor.fall_speed = max(landing), 0.0
+            if actor is self.player:
+                self.sounds.append('land')
         else:
             actor.base = below
 
@@ -894,7 +1074,6 @@ class World:
             if self.reveal_time == 0 and self.revealed:
                 self.revealed.clear()
                 self.lens_lit = False
-                self.notify('발판이 다시 사라졌습니다!')
         lens = self.stage.lens
         for actor in watchers:
             if not actor.radar or actor.elevator_target is not None:
@@ -904,7 +1083,6 @@ class World:
                    and hypot(lens.x - actor.x, lens.height - eye) <= RADAR_RANGE)
             if lit and not self.lens_lit:
                 self.lens_lit = True
-                self.notify('렌즈가 빛을 퍼뜨려 숨은 발판이 모두 드러났습니다!')
             for index, platform in enumerate(self.stage.platforms):
                 left, right = self.platform_span(index)
                 x = min(max(actor.x, left), right)
@@ -923,8 +1101,11 @@ class World:
                         and actor.fall_speed == 0 and abs(actor.base - switch.height) < 1
                         and abs(actor.x - switch.x) <= PLATE_RANGE):
                     self.switched[index] = True
-                    self.notify('스위치가 눌렸습니다! ' + ('출구 포탈이 열렸습니다.' if switch.door is None
-                                                         else '잠긴 문이 열렸습니다.'))
+                    if any(platform.switch == index for platform in self.stage.platforms):
+                        self.notify('레버가 당겨졌습니다! 본체로 나룻배 발판에 올라서면 건너편으로 갑니다.')
+                    else:
+                        self.notify('스위치가 눌렸습니다! ' + ('출구 포탈이 열렸습니다.' if switch.door is None
+                                                             else '잠긴 문이 열렸습니다.'))
                     break
 
     def _sky_book(self):
@@ -944,31 +1125,33 @@ class World:
         return min(max(x, LEFT + half), RIGHT - half), max(20.0, height)
 
     def sky_grab(self, x: float, height: float) -> bool:
-        """마우스를 누른 자리의 하늘 땅을 잡는다. 분신 둘레 reach 안의 땅만 잡힌다."""
+        """마우스를 누른 자리의 하늘 땅을 잡는다. 맵 어디의 땅이든 잡히고, 잡힌 땅은 분신 둘레 reach 안으로 날아온다
+        (섬이 떠다니다 가까이 오기를 기다리지 않게)."""
         book = self._sky_book()
         if book is None:
             return False
         sky = self.stage.sky
-        center = (book.x, book.jump_height + 30)
         hit = [index for index, (bx, bh) in enumerate(self.sky_blocks)
                if abs(x - bx) <= sky.width / 2 + 10 and abs(height - bh) <= 24]
-        near = [index for index in hit if index not in sky.fixed
-                and hypot(self.sky_blocks[index][0] - center[0], self.sky_blocks[index][1] - center[1]) <= sky.reach]
+        near = [index for index in hit if index not in sky.fixed]
         if not near:
-            if any(index in sky.fixed for index in hit):
-                self.notify('이 땅에는 염력이 통하지 않습니다.')
-            elif hit:
-                self.notify('염력이 닿지 않습니다. 분신을 땅 가까이 데려가세요.')
             return False
         self.sky_hold = min(near, key=lambda index: abs(x - self.sky_blocks[index][0]))
         self.sky_drag(x, height)
         return True
 
     def sky_drag(self, x: float, height: float):
+        """잡은 땅이 갈 자리를 정한다. 땅은 매 프레임 SKY_FLY 빠르기로 그리로 날아간다 (_fly_held_sky)."""
         self.sky_target = (x, height)
-        book = self._sky_book()
-        if self.sky_hold is not None and book is not None:
-            self.sky_blocks[self.sky_hold] = list(self._sky_clamp(book, x, height))
+
+    def _fly_held_sky(self, book: Actor):
+        tx, th = self._sky_clamp(book, *self.sky_target)
+        block = self.sky_blocks[self.sky_hold]
+        dx, dh = tx - block[0], th - block[1]
+        distance, step = hypot(dx, dh), SKY_FLY * STEP
+        if distance > step:
+            tx, th = block[0] + dx * step / distance, block[1] + dh * step / distance
+        self.sky_blocks[self.sky_hold] = [tx, th]
 
     def sky_release(self):
         if self.sky_hold is not None:
@@ -1010,7 +1193,7 @@ class World:
         if self._sky_book() is None:
             self.sky_release()
         elif self.sky_hold is not None:
-            self.sky_drag(*self.sky_target)   # 분신이 걸어가면 잡은 땅도 끌려온다
+            self._fly_held_sky(self._sky_book())   # 분신이 걸어가면 잡은 땅도 끌려온다
         self._drift_sky()
         player = self.player
         on = None
@@ -1018,18 +1201,35 @@ class World:
             on = next((index for index, (x, height) in enumerate(sky.switches)
                        if player.floor == 0 and abs(player.base - height) < 1
                        and abs(player.x - x) <= PLATE_RANGE), None)
-        if on is not None and on != self.sky_on and self.sky_progress < len(sky.switches):
-            if on == self.sky_progress:
-                self.sky_progress += 1
-                self.notify('하늘 문이 열렸습니다!' if self.sky_progress == len(sky.switches)
-                            else f'{on + 1}번 스위치가 켜졌습니다.')
-            elif on > self.sky_progress:
-                self.sky_progress = 0
-                self.sky_blocks = [list(block) for block in sky.blocks]
-                self.sky_hold = None
-                self.sky_pin = [0.0] * len(self.sky_blocks)
-                self.notify('순서가 틀렸습니다! 스위치와 하늘 땅이 처음으로 돌아갑니다.')
+        if on is not None and on != self.sky_on:
+            if on in self.sky_keys:
+                self.notify(f'{on + 1}번 포털의 열쇠는 이미 얻었습니다.')
+            else:
+                self.room_request = next(room for room, portal in SKY_ROOMS.items() if portal == on)
         self.sky_on = on
+
+    def enter_room(self) -> 'World':
+        """밟은 하늘 포털 너머의 몬스터 방. 체력·경험치·무기·분신을 그대로 가져간다."""
+        room = World(self.room_request, weapon_index=self.weapon_index, xp=self.xp, monster_echoes=self.monster_echoes)
+        room.health = self.health
+        room.parent = self
+        self.room_request = None
+        return room
+
+    def back_from_room(self) -> 'World':
+        """깬 방에서 하늘 땅의 그 포털 위로 돌아간다. 열쇠를 하나 얻는다."""
+        parent = self.parent
+        parent.sky_keys.add(SKY_ROOMS[self.index])
+        parent.xp, parent.weapon_index, parent.monster_echoes = self.xp, self.weapon_index, self.monster_echoes
+        parent.health = min(self.health, parent.max_health)
+        keys, need = len(parent.sky_keys), len(parent.stage.sky.switches)
+        if keys == need:   # 문 없던 출구 자리에 보스방과 같은 포털(pixelfx)이 열리고, 다가가면 빨려 들어간다
+            parent.portal_opened_at = parent.time
+            parent.sounds.append('boss_defeat')
+            parent.notify('열쇠를 모두 모았습니다! 출구에 포털이 열렸습니다.')
+        else:
+            parent.notify(f'열쇠 {keys}/{need}')
+        return parent
 
     def _potion_landing(self, floor: int, x: float, before: float, now: float):
         """물약이 before에서 now 높이로 떨어지는 사이 닿는 가장 높은 면: (땅 번호 또는 None, x, 높이)."""
@@ -1056,7 +1256,6 @@ class World:
             if (not LEFT <= nx <= RIGHT or nh < -PIT_DEPTH
                     or any(left <= nx <= right and bottom <= nh <= top
                            for left, bottom, right, top in self.stage.seals)):
-                self.notify('물약이 깨졌습니다.')
                 continue
             landing = self._potion_landing(floor, nx, height, nh) if vh < 0 else None
             if landing is None:
@@ -1065,7 +1264,6 @@ class World:
             self.portals[self.portal_next] = (floor, *landing)
             self.portal_next = 1 - self.portal_next
             self.portal_lock = True   # 발밑에 생긴 포털로 바로 빨려 들어가지 않게
-            self.notify('포털이 이어졌습니다!' if all(self.portals) else '포털 한쪽이 열렸습니다. 한 병 더 던지세요.')
         self.potions = flying
 
     def portal_point(self, index: int) -> tuple[int, float, float]:
@@ -1093,7 +1291,6 @@ class World:
             return
         player.floor, player.x, player.base = self.portal_point(1 - inside)
         self.portal_lock = True
-        self.notify('포털을 지나왔습니다.')
 
     def _move(self, actor: Actor, motion: Motion, monster_kind=None):
         self._ride(actor)
@@ -1102,6 +1299,8 @@ class World:
         self._settle(actor, before)
 
     def _move_body(self, actor: Actor, motion: Motion, monster_kind=None):
+        if actor is self.player and self._climb(actor, motion):
+            return
         if monster_kind == 'crawler' and actor.door_climb_time > 0:
             progress = min(1.0, actor.door_climb_time / SPIDER_DOOR_CLIMB_DURATION)
             across = max(0.0, min(1.0, (progress - 0.35) / 0.30))
@@ -1166,7 +1365,6 @@ class World:
                     actor.jump_time = 0.0
                     actor.web_flying = False
                     return
-                self.notify('거미줄이 닿는 벽이나 천장이 없습니다.')
             else:
                 actor.web_aiming = False
             if actor.web_time > 0:
@@ -1252,16 +1450,20 @@ class World:
                 and (actor.jump_time > 0 or actor.fall_speed > 0 or rising)):
             # 2단 점프: 지금 높이에서 보통 점프를 한 번 더 한다. 발밑에서 깃털이 터진다.
             actor.base, actor.fall_speed = actor.jump_height, 0.0
-            actor.jump_duration, actor.jump_peak, actor.jump_time = JUMP_DURATION, JUMP_HEIGHT, STEP
+            actor.jump_duration, actor.jump_peak, actor.jump_time = self.jump_duration, self.jump_peak, STEP
             actor.air_jumped = True
+            if actor is self.player:
+                self.sounds.append('double_jump')
             actor.air_dashed, actor.dash_cooldown = False, 0.0   # 2단 점프 뒤 바로 대시를 한 번 더 쓸 수 있다
             self.boss_effects.append(boss_skills.Effect('feather-burst', actor.x, actor.floor, lift=actor.base,
                                                         scale=0.55, life=3.0))
         elif (motion.jump and actor.jump_time == 0 and actor.fall_speed == 0 and not rising
                 and not motion.stairs and monster_kind != 'beast'):
-            actor.jump_duration = JUMP_DURATION
-            actor.jump_peak = JUMP_HEIGHT
+            actor.jump_duration = self.jump_duration
+            actor.jump_peak = self.jump_peak
             actor.jump_time = STEP
+            if actor is self.player:
+                self.sounds.append('jump')
         elif actor.jump_time > 0:
             actor.jump_time += STEP
             if actor.jump_time >= actor.jump_duration:
@@ -1303,6 +1505,8 @@ class World:
             actor.dash_from = actor.dash_to = actor.x
             actor.dash_from_h = actor.dash_to_h = height
             actor.air_dashed = airborne or bool(vy)
+            if actor is self.player:
+                self.sounds.append('dash')
             if not airborne:   # 땅을 박차고 나갈 때만 먼지가 튄다
                 self.boss_effects.append(boss_skills.Effect('heavy-landing', actor.x, actor.floor, -actor.facing,
                                                             scale=0.45, lift=actor.base, life=1.0))
@@ -1413,26 +1617,95 @@ class World:
                       '감시등에 들켰습니다! 분신을 아래층 감시 구역에 보내 빛을 돌리세요.')
 
     def _update_bridge(self):
-        """낭떠러지: 분신(재현) 발밑에 빛 발판이 생기고 life초 뒤 사라진다. 발판 없는 곳의 본체는 떨어진다."""
-        bridge = self.stage.bridge
-        if bridge is None:
+        """거미줄 다리: 거미 분신(재현)이 낭떠러지 위를 지나간 자리 아래에 거미줄이 쳐지고 life초 뒤 끊어진다.
+        줄에 매달려 있을 때뿐 아니라 줄을 놓고 날아가거나 뛰는 동안에도 쳐서 본체가 따라 걸어올 길이 끊기지 않게 하고,
+        한 프레임에 여러 칸을 지나가면 지나온 칸을 모두 채운다."""
+        for tiles in self.bridge_tiles:
+            tiles[:] = [max(0.0, remaining - STEP) for remaining in tiles]
+        echo = self.echo
+        last, self.bridge_last = getattr(self, 'bridge_last', None), None
+        if echo is None or echo.monster_kind != 'crawler':
             return
-        self.bridge_tiles = [max(0.0, remaining - STEP) for remaining in self.bridge_tiles]
-        echo = self.echo.actor if self.echo is not None else None
-        if echo is not None and echo.floor == bridge.floor and echo.elevator_target is None:
-            tile = self.bridge_tile_at(echo.x)
-            if tile is not None:
-                self.bridge_tiles[tile] = bridge.life
+        actor = echo.actor
+        self.bridge_last = (actor.floor, actor.x)
+        spot = self.bridge_tile_at(actor.floor, actor.x)
+        if spot is None:
+            return
+        index, tile = spot
+        first = tile
+        if last is not None and last[0] == actor.floor:
+            before = self.bridge_tile_at(*last)
+            if before is not None and before[0] == index:
+                first = before[1]
+        life = self.stage.bridges[index].life
+        for column in range(min(first, tile), max(first, tile) + 1):
+            self.bridge_tiles[index][column] = life
+
+    def _update_ropes(self):
+        """거미 밧줄: 재현 중인 거미 분신이 rope 조각상에 줄을 붙인 순간 그 아래로 밧줄이 늘어지고 ROPE_LIFE초 뒤 끊어진다."""
+        for rope in self.ropes:
+            rope[4] -= STEP
+        self.ropes = [rope for rope in self.ropes if rope[4] > 0]
+        echo = self.echo
+        if echo is None or echo.monster_kind != 'crawler' or echo.actor.web_time != STEP or not echo.actor.web_anchor_beam:
+            return
+        actor = echo.actor
+        for index, beam in enumerate(self.stage.web_beams):
+            if beam.rope and beam.floor == actor.floor and beam.left <= actor.web_anchor_x <= beam.right:
+                rope = next((rope for rope in self.ropes if rope[5] == index), None)
+                if rope is not None:   # 같은 조각상에 다시 붙이면 매달린 본체가 떨어지지 않게 자리는 두고 시간만 늘린다
+                    rope[4] = ROPE_LIFE
+                    continue
+                top = beam.underside - ROPE_TOP
+                below = [height for height in self._ground_heights(Actor(actor.web_anchor_x, actor.floor)) if height < top]
+                self.ropes.append([actor.floor, actor.web_anchor_x, max(below, default=0.0), top, ROPE_LIFE, index])
+
+    def _gain_xp(self, amount: int):
+        level = self.level
+        self.xp += amount
+        if self.level > level:
+            self.health = self.max_health
+            self.level_up_time = LEVEL_UP_SECONDS
+            self.sounds.append('level_up')
+            self.notify(f'레벨 {self.level}! 체력을 모두 회복했습니다.')
+
+    def _update_eggs(self):
+        """거미 알: 본체가 닿으면 경험치를 얻는다."""
         player = self.player
-        if player.floor != bridge.floor or player.elevator_target is not None or player.jump_time > 0:
-            return
-        tile = self.bridge_tile_at(player.x)
-        if tile is not None and self.bridge_tiles[tile] <= 0:
-            player.x = bridge.left - ACTOR_RADIUS - 10
-            player.facing = 1
-            self.invulnerable = 0
-            self.hurt(max(1, round(self.max_health * HAZARD_RATIO)),
-                      '낭떠러지에 떨어졌습니다! 분신이 지나간 빛 발판만 밟으세요.')
+        for egg in list(self.eggs):
+            x, height, xp = egg
+            if abs(player.x - x) <= EGG_REACH and abs(player.jump_height - height) <= 30:
+                self.eggs.remove(egg)
+                self._gain_xp(xp)
+
+    def _climb(self, actor: Actor, motion: Motion) -> bool:
+        """본체의 거미 밧줄 오르기. 줄에 매달려 있으면 True."""
+        rope = actor.rope
+        if rope is None and motion.stairs > 0:
+            height = actor.jump_height
+            rope = next((r for r in self.ropes if r[0] == actor.floor and abs(r[1] - actor.x) <= ROPE_GRAB
+                         and r[2] - 1 <= height <= r[3]), None)
+            if rope is not None:   # ↑: 가까운 줄을 붙잡는다 (뛰는 중에도)
+                actor.rope, actor.base, actor.jump_time, actor.fall_speed = rope, height, 0.0, 0.0
+        if rope is None:
+            return False
+        if not any(r is rope for r in self.ropes):   # 줄이 끊어졌다: 그 자리에서 떨어진다
+            actor.rope = None
+            return False
+        actor.x, actor.moving = rope[1], False
+        if motion.horizontal:
+            actor.facing = motion.horizontal
+        if motion.jump:   # 뛰어내린다: 지금 높이에서 보통 점프
+            actor.rope = None
+            actor.jump_duration, actor.jump_peak, actor.jump_time = self.jump_duration, self.jump_peak, STEP
+            self._move_x(actor, motion.horizontal * MOVE_SPEED * STEP)
+            if actor is self.player:
+                self.sounds.append('jump')
+            return True
+        actor.base = min(rope[3], max(rope[2], actor.base + motion.stairs * ROPE_CLIMB * STEP))
+        if motion.stairs < 0 and actor.base <= rope[2]:
+            actor.rope = None   # 바닥까지 내려와 놓는다
+        return True
 
     def _clear_line(self, first: Actor, second: Actor, distance: float) -> bool:
         if first.elevator_target is not None or second.elevator_target is not None:
@@ -1471,13 +1744,15 @@ class World:
         self.attack_flash = self.attack_duration
         self.attack_age = 0.0
         self.attack_hit_pending = True
+        self.sounds.append(kind)   # 'slash' 또는 'thrust'
 
     def _apply_attack(self):
         weapon = WEAPONS[self.weapon_index]
         reach = round(weapon.reach * (0.8 if self.attack_kind == 'slash' else 1.3))
         damage = max(1, attack_power(self.level) + weapon.bonus + (1 if self.attack_kind == 'slash' else 0))
         for enemy in self.enemies:
-            if not self._in_reach(enemy, reach) or (enemy.broom is not None and enemy.broom < BROOM_MOUNT):
+            if (not self._in_reach(enemy, reach) or (enemy.broom is not None and enemy.broom < BROOM_MOUNT)
+                    or enemy.phase_time > 0):
                 continue
             self.hit_sparks.append([enemy.actor.x, enemy.actor.floor, 0.0])
             if enemy.health is None:
@@ -1486,22 +1761,25 @@ class World:
                 enemy.health = max(0, enemy.health - damage)
                 self.damage_texts.append([enemy.actor.x, enemy.actor.floor, 0.0, str(damage), False])
                 enemy.flash = 0.19
+                self.sounds.append('hit')
         boss_defeated = any(enemy.health == 0 and enemy.spawn.kind in BOSS_KINDS for enemy in self.enemies)
         if self.stage.isolation and any(enemy.health == 0 and enemy.spawn.kind == 'magic_armor_guard'
                                         for enemy in self.enemies):
             self.isolation_closed = True
-        level = self.level
-        self.xp += sum(ENEMY_KINDS[enemy.spawn.kind].xp for enemy in self.enemies if enemy.health == 0)
-        if self.level > level:
-            self.health = self.max_health
-            self.level_up_time = LEVEL_UP_SECONDS
-            self.notify(f'레벨 {self.level}! 체력을 모두 회복했습니다.')
+        self._gain_xp(sum(ENEMY_KINDS[enemy.spawn.kind].xp for enemy in self.enemies if enemy.health == 0))
         defeated = [enemy for enemy in self.enemies if enemy.health == 0 and enemy.spawn.kind not in BOSS_KINDS]
+        if defeated:
+            self.sounds.append('monster_die')
         for enemy in defeated:
             self.offer_monster_echo(enemy.spawn.kind)
         self.enemies = [enemy for enemy in self.enemies if enemy.health != 0]
         if boss_defeated:
-            self.notify('보스를 처치했습니다! 출구로 이동하세요.')
+            self.sounds.append('boss_defeat')
+            self.portal_opened_at = self.time
+            self.notify('보스를 처치했습니다! 출구에 포털이 열렸습니다.')
+        elif self.index in SKY_ROOMS and not self.enemies and self.portal_opened_at is None:
+            self.portal_opened_at = self.time
+            self.notify('열쇠를 얻었습니다! 가운데에 열린 포털로 돌아가세요.')
 
     def _update_enemy(self, enemy: Enemy):
         kind = ENEMY_KINDS[enemy.spawn.kind]
@@ -1524,6 +1802,9 @@ class World:
             if not same_floor:
                 enemy.boss_engaged = False
             elif self._clear_line(actor, self.player, sight):
+                if not enemy.boss_appeared:   # 처음 마주친 순간 한 번만 등장 음악
+                    enemy.boss_appeared = True
+                    self.sounds.append('final_boss' if enemy.spawn.kind == 'echo_knight' else 'boss_appears')
                 enemy.boss_engaged = True
         boss_duel = is_boss and same_floor and enemy.boss_engaged
         if boss_duel:
@@ -1564,10 +1845,12 @@ class World:
             enemy.target = self.echo.actor
             enemy.last_seen = self.echo.actor.x
 
+        if boss_skills.update_phase(self, enemy):
+            return
         if (enemy.broom is None and enemy.spawn.kind == 'grand_witch'
                 and enemy.health is not None and enemy.health <= enemy.max_health / 2):
             enemy.broom, enemy.skill, enemy.windup, enemy.recovery = 0.0, '', 0, 0
-            self.notify('대마녀가 빗자루에 올라탔습니다! 하늘 섬이나 2단 점프로 올라가 베세요.')
+            self.sounds.append('broom')
         flying = enemy.broom is not None
         if flying:
             enemy.broom += STEP
@@ -1585,6 +1868,7 @@ class World:
         if enemy.windup > 0:
             enemy.windup -= STEP
             if enemy.windup <= 0:
+                self.sounds.append('enemy_attack')
                 self._enemy_attack(enemy, kind.attack_range)
                 enemy.recovery = 0.65
             return
@@ -1638,13 +1922,14 @@ class World:
 
     def hurt(self, amount: int, message: str) -> bool:
         """본체가 피해를 한 번 입는다. 무적 시간 중이면 False."""
-        if self.invulnerable > 0 or self.player.dash_time > 0:
+        if self.god or self.invulnerable > 0 or self.player.dash_time > 0:
             return False
         self.health = max(0, self.health - amount)
         self.invulnerable = 0.92
+        self.sounds.append('hurt')
         self.damage_texts.append([self.player.x, self.player.floor, 0.0, f'-{amount}', True])
-        self.notify(message)
-        if self.health == 0:
+        if self.health == 0:   # 맞을 때마다 띄우지 않고, 쓰러졌을 때만 무엇에 당했는지 알려 준다
+            self.notify(message)
             self.result = 'defeated'
         return True
 
@@ -1655,13 +1940,13 @@ class World:
         return round(kind.damage * self.stage.enemy_scale)
 
     def hurt_echo(self, actor: Actor, amount: int) -> bool:
-        if not any(actor is echo for echo in self.echo_actors()) or self.echo_invulnerable > 0:
+        if self.god or not any(actor is echo for echo in self.echo_actors()) or self.echo_invulnerable > 0:
             return False
         damage = max(1, round(amount * ECHO_DAMAGE_RATIO))
         self.echo_invulnerable = ECHO_INVULNERABILITY
+        self.sounds.append('hurt')
         self.health = max(0, self.health - damage)
         self.damage_texts.append([actor.x, actor.floor, 0.0, f'-{damage}', True])
-        self.notify(f'분신이 피격되어 본체 체력이 {damage} 감소했습니다.')
         if self.health == 0:
             self.result = 'defeated'
         return True

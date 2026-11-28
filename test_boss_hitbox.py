@@ -75,8 +75,8 @@ class WitchIslandTests(unittest.TestCase):
         x, height = w.sky_blocks[0]
         w.player.x = x - 60
         w.step(Motion(1, jump=True))
-        for frame in range(60):   # 섬 높이(80)는 보통 점프(48)로 못 닿아 꼭대기에서 2단 점프한다
-            w.step(Motion(1 if w.player.x < x else 0, jump=frame == 17))
+        for frame in range(120):   # 섬 높이(120)는 점프(96)로 못 닿아 2단 점프한다
+            w.step(Motion(1 if w.player.x < x else 0, jump=frame == 24))
         self.assertEqual(w.player.base, height)
         w.player.x = x + 200   # 섬 끝 밖으로 걸어 나가면 떨어진다
         for _ in range(60):
@@ -107,6 +107,29 @@ class WitchBroomTests(unittest.TestCase):
             w.step(Motion())
         self.assertAlmostEqual(witch.actor.base, BROOM_HEIGHT, delta=1)
         self.assertGreater(w.health, 0)
+
+
+class KnightPhaseTests(unittest.TestCase):
+    """잔향 기사는 체력 2/3·1/3에서 단계가 오르고(빛의 기둥 → 부활), 오르는 동안은 베어도 체력이 줄지 않는다."""
+
+    def test_three_phases(self):
+        import boss_skills
+        w = World(8)
+        knight = next(e for e in w.enemies if e.spawn.kind == 'echo_knight')
+        self.assertTrue(all(s.phase == 1 for s in boss_skills.SKILLS['echo_knight'] if s.name in ('charge', 'skulls', 'hands')))
+        self.assertEqual(next(s for s in boss_skills.SKILLS['echo_knight'] if s.name == 'pillar').phase, 2)
+        for health, phase, sheet in ((knight.max_health * 2 // 3, 2, 'holy-pillar'), (knight.max_health // 3, 3, 'resurrection')):
+            knight.health = health
+            self.assertTrue(boss_skills.update_phase(w, knight))
+            self.assertEqual(knight.phase, phase)
+            self.assertIn(sheet, [effect.sheet for effect in w.boss_effects])
+            w.player.floor, w.player.x, w.player.facing = knight.actor.floor, knight.actor.x - 40, 1
+            w._attack()
+            w._apply_attack()
+            self.assertEqual(knight.health, health)   # 단계가 오르는 연출 중에는 무적
+            while boss_skills.update_phase(w, knight):
+                pass
+            self.assertLessEqual(knight.phase_time, 0)
 
 
 if __name__ == '__main__':

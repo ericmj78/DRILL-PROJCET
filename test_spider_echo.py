@@ -8,9 +8,9 @@ from world import Actor, Motion, World
 
 
 def spider_room(walls=()):
-    """거미줄을 붙일 천장(위층 바닥)이 있는 방: 간수 보스방(구간 2)을 2층으로 늘리고 walls를 세운다."""
+    """거미줄을 붙일 천장(위층 바닥, 높이 365)이 있는 방: 간수 보스방(구간 2)을 층 높이 400인 2층으로 늘리고 walls를 세운다."""
     w = World(2)
-    w.stage = replace(w.stage, floors=2, walls=walls)
+    w.stage = replace(w.stage, floors=2, walls=walls, floor_height=400)
     return w
 
 
@@ -317,6 +317,78 @@ class SpiderEchoTests(unittest.TestCase):
         self.world._move(actor, Motion(web=True))
         self.assertEqual(actor.web_time, 0)
         self.assertEqual(actor.x, 100)
+
+
+class WebBridgeTests(unittest.TestCase):
+    """1스테이지 3층 거미줄 다리: 거미 분신이 줄을 놓고 날아가는 동안에도, 한 번에 여러 칸을 지나도 다리가 이어진다."""
+
+    def test_bridge_follows_the_flying_spider_without_gaps(self):
+        from world import Echo
+        w = World(0)
+        bridge = w.stage.bridges[0]
+        spider = Actor(bridge.left + 30, bridge.floor)
+        spider.base = 150   # 줄을 놓고 낭떠러지 위를 날아가는 중 (web_time 0)
+        w.echo = Echo(spider, (Motion(),) * 2, monster_kind='crawler')
+        w._update_bridge()
+        spider.x += bridge.tile * 3 + 5   # 한 프레임에 세 칸 넘게 지나간다
+        w._update_bridge()
+        first = w.bridge_tile_at(bridge.floor, bridge.left + 30)[1]
+        last = w.bridge_tile_at(bridge.floor, spider.x)[1]
+        self.assertTrue(all(w.bridge_tiles[0][column] > 0 for column in range(first, last + 1)))
+        w.player.floor, w.player.x, w.player.base = bridge.floor, spider.x, 0.0
+        self.assertIn(0.0, list(w._ground_heights(w.player)))   # 본체가 그 위를 걸을 수 있다
+
+
+class SunkenPoisonTests(unittest.TestCase):
+    """1스테이지 2층 독 웅덩이는 바닥선보다 낮다: 낮게 줄을 타고 지나가는 거미는 안 맞고, 빠지면 맞고 걸어 나온다."""
+
+    def test_low_swing_over_poison_is_safe(self):
+        from world import Echo
+        w = World(0)
+        w.enemies = []
+        floor, left, right = w.stage.poison_zones[0]
+        spider = Actor(left + 40, floor)
+        spider.jump_time = 0.02   # 바닥선 바로 위(약 6)를 낮게 날아 지나가는 중
+        w.echo = Echo(spider, (Motion(),) * 10, monster_kind='crawler')
+        health = w.health
+        w.step(Motion())
+        self.assertEqual(w.health, health)
+
+    def test_walking_through_poison_hurts_and_climbs_out(self):
+        w = World(0)
+        w.enemies = []
+        floor, left, right = w.stage.poison_zones[2]
+        w.player = Actor(right + 20, floor, -1)
+        health = w.health
+        for _ in range(60):   # 웅덩이를 가로질러 왼쪽 쉬는 바닥까지 걷는다
+            w.step(Motion(-1))
+        self.assertLess(w.health, health)
+        self.assertEqual((w.player.base, w.result), (0.0, 'playing'))
+        self.assertLess(w.player.x, left)
+
+
+class FerryTests(unittest.TestCase):
+    """1스테이지 3층 나룻배 발판: 레버가 당겨진 뒤에만 올라선 본체를 건너편으로 실어 가고, 비면 돌아온다."""
+
+    def test_ferry_carries_the_player_only_after_the_lever(self):
+        from stages import STEP
+        w = World(0)
+        w.player = Actor(510, 2, 1)
+        w.player.base = 30   # 낭떠러지 앞 나룻배 발판 위
+        for _ in range(60):
+            w.step(Motion())
+        self.assertEqual(w.player.x, 510)   # 레버 전에는 움직이지 않는다
+        self.assertTrue(w.portal_open)       # 레버는 출구를 잠그지 않는다
+        w.switched[0] = True
+        for _ in range(round(6.5 / STEP)):
+            w.step(Motion())
+        self.assertEqual((w.player.base, w.result), (30, 'playing'))
+        self.assertGreater(w.player.x, w.stage.bridges[0].right)   # 낭떠러지 건너편
+        w.player.x += 200   # 내리면 발판은 처음 자리로 돌아온다
+        w.player.base = 0.0
+        for _ in range(round(6.5 / STEP)):
+            w._update_ferries()
+        self.assertEqual(w.platform_span(0), (460.0, 560.0))
 
 
 if __name__ == '__main__':

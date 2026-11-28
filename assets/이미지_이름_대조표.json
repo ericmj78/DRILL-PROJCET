@@ -3,11 +3,8 @@
   "echo_jump_sheet.png": "분신_점프_시트.png",
   "echo_silver_gold.png": "분신_은빛_금빛.png",
   "monster_01_hornbeast.png": "몬스터_01_뿔짐승.png",
-  "monster_01_hornbeast_walk_parts.png": "몬스터_01_뿔짐승_걷기_부위.png",
   "monster_02_stone_warden.png": "monster_concepts/몬스터_02_돌_수호자.png",
   "monster_03_watcher.png": "몬스터_03_외눈유령.png",
-  "monster_spider.png": "몬스터_거미.png",
-  "monster_spider_walk_sheet.png": "몬스터_거미_걷기_시트.png",
   "monster_concepts/broken-jester-walk-16.png": "monster_concepts/부서진_광대_걷기_16.png",
   "monster_concepts/cursed-lantern.png": "monster_concepts/저주받은_등불.png",
   "monster_concepts/echo-knight-attack-sheet.png": "monster_concepts/분신_기사_공격_시트.png",
@@ -78,5 +75,14 @@
   "attack_fx/level-up.png": "attack_fx/레벨업.png",
   "attack_fx/feather-burst.png": "attack_fx/깃털_폭발.png",
   "attack_fx/skill-unlock.png": "attack_fx/능력_획득.png",
-  "attack_fx/spell-charge.png": "attack_fx/마력_충전.png"
+  "attack_fx/spell-charge.png": "attack_fx/마력_충전.png",
+  "attack_fx/flying-skull.png": "attack_fx/해골_불꽃.png",
+  "attack_fx/wisp.png": "attack_fx/도깨비불.png",
+  "attack_fx/grasping-hands.png": "attack_fx/그림자_손.png",
+  "attack_fx/dark-explosion.png": "attack_fx/어둠_폭발.png",
+  "attack_fx/holy-pillar.png": "attack_fx/빛의_기둥.png",
+  "attack_fx/resurrection.png": "attack_fx/부활.png",
+  "attack_fx/fog.png": "attack_fx/안개.png",
+  "attack_fx/magic-circle.png": "attack_fx/마법진.png",
+  "attack_fx/rune-circle.png": "attack_fx/룬_원.png"
 }

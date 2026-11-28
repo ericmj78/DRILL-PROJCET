@@ -8,8 +8,10 @@ import copy
 import sys
 
 import boss_skills
-from stages import BOSS_KINDS, LEFT, MOVE_SPEED, RIGHT, SKY_STEP, STAGES, STEP
-from world import JUMP_DURATION, JUMP_HEIGHT, SKY_PIN, Actor, Echo, Motion, World
+from stages import BOSS_KINDS, LEFT, MOVE_SPEED, RIGHT, SKY_ROOMS, SKY_STEP, STAGES, STEP
+from math import hypot
+
+from world import JUMP_DURATION, JUMP_HEIGHT, SKY_FLY, SKY_PIN, Actor, Echo, Motion, World
 
 
 class Bot:
@@ -26,15 +28,6 @@ class Bot:
             self.w.resolve_monster_echo()
         self.w.step(Motion(horizontal, stairs, jump, web, held, dash=dash), attack)
         self.frames += 1
-
-    def super_jump(self, target_x):
-        """뿔짐승 분신: Space를 1초 눌러 모았다가 슈퍼 점프하고, 날아가며 target_x 쪽으로 몸을 튼다."""
-        self.tick(jump=True, held=True)
-        while self.me.beast_charge_active and self.w.result == 'playing':
-            self.tick(held=True)
-        while self.w.result == 'playing' and (self.me.jump_time > 0 or self.me.fall_speed):
-            gap = target_x - self.me.x
-            self.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
 
     def go(self, x, slash=False):
         """x까지 걷는다. slash=True면 걸으면서 계속 벤다."""
@@ -57,6 +50,18 @@ class Bot:
                 return
             self.tick()
         raise AssertionError(f'기다리던 상황이 오지 않았습니다 {self}')
+
+    def portal_room(self, portal):
+        """밟은 하늘 포털 너머 방을 그 방의 공략대로 깨고 열쇠를 들고 돌아온다."""
+        assert self.w.room_request is not None and SKY_ROOMS[self.w.room_request] == portal, f'{portal + 1}번 포털에 들어가지 않았습니다 {self}'
+        room = Bot.__new__(Bot)
+        room.w, room.frames = self.w.enter_room(), 0
+        SOLUTIONS[room.w.index + 1](room)
+        room.wait(1.0)
+        assert room.w.result == 'cleared', f'포털 너머 방을 깨지 못했습니다 {room}'
+        self.w = room.w.back_from_room()
+        self.frames += room.frames
+        assert portal in self.w.sky_keys, f'{portal + 1}번 열쇠를 얻지 못했습니다 {self}'
 
     def up(self):
         floor = self.me.floor
@@ -101,29 +106,80 @@ class Bot:
         self.w.sky_release()
         assert self.w.sky_blocks[index] == [x, height], f'하늘 땅이 제자리에 놓이지 않았습니다 {self}'
 
-    def _ghosts_coming(self, near):
-        """같은 단이나 바로 위아래 단에서 다가오는(또는 바로 옆의) 층 유령."""
-        me = self.me
-        return [e for e in self.w.enemies if e.spawn.kind == 'tier_ghost' and e.actor.floor == me.floor
-                and abs(e.actor.base - me.base) <= 50 and abs(e.actor.x - me.x) < near
-                and ((e.actor.x - me.x) * e.actor.facing < 0 or abs(e.actor.x - me.x) < 90)]
-
-    def ghosts(self, near=200):
-        """다가오는 층 유령을 제자리에서 벤다."""
-        for _ in range(round(8 / STEP)):
-            foes = self._ghosts_coming(near)
-            if not foes or self.w.result != 'playing':
-                return
+    def swing_across(self, direction):
+        """거미 분신(녹화 중): 앞쪽 조각상에 줄을 쏘고(F) 곧바로 뛰어(Space) 날아가다가, 내려올 때 다음 조각상에
+        줄을 다시 쏜다. 낭떠러지 건너편 땅에 내려설 때까지 되풀이한다."""
+        self.tick(direction, web=True)
+        assert self.me.web_time > 0, f'조각상에 줄이 닿지 않았습니다 {self}'
+        while self.w.recording is not None and self.me.web_time > 0:
             me = self.me
-            toward = 1 if min(foes, key=lambda e: abs(e.actor.x - me.x)).actor.x > me.x else -1
-            self.tick(toward if me.facing != toward else 0, attack='slash')
-        raise AssertionError(f'유령을 처치하지 못했습니다 {self}')
+            if not me.web_flying:
+                self.tick(direction, jump=True)
+                continue
+            hit = self.w.spider_web_target(me, direction)
+            self.tick(direction, web=hit is not None and (hit[0] - me.web_anchor_x) * direction > 60 and me.web_vy < 0)
+        assert self.w.recording is not None and not self.w._over_pit(self.me.floor, self.me.x),             f'거미 분신이 낭떠러지에 떨어졌습니다 {self}'
 
-    def cross(self, x):
-        """발판 위를 걷다가 유령이 다가오면 멈춰서 벤다."""
-        while self.w.result == 'playing' and abs(self.me.x - x) >= 3:
-            self.ghosts()
-            self.tick(1 if x > self.me.x else -1)
+    def follow(self, x):
+        """본체: 재현 중인 거미 분신의 60px 뒤를 따라 거미줄 다리를 건너 x까지 간다."""
+        for _ in range(round(15 / STEP)):
+            if self.w.result != 'playing' or abs(self.me.x - x) < 3:
+                return
+            direction = 1 if x > self.me.x else -1
+            target = x
+            if self.w.echo is not None:
+                behind = self.w.echo.actor.x - 60 * direction
+                target = min(x, behind) if direction > 0 else max(x, behind)
+            gap = target - self.me.x
+            self.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
+        raise AssertionError(f'거미줄을 따라 {x}에 가지 못했습니다 {self}')
+
+    def web_climb(self, direction):
+        """거미 분신(녹화 중): 앞 조각상에 줄을 쏘고, ↑로 줄을 감아 올라간 뒤 뛰어 다음(더 높은) 조각상에 줄을 쏜다.
+        그 층 맨 위 밧줄 조각상에 매달릴 때까지 되풀이한다."""
+        beams = self.w.stage.web_beams
+
+        def beam_of(x, y):
+            return next((i for i, b in enumerate(beams) if b.floor == self.me.floor and b.left <= x <= b.right
+                         and abs(b.underside - y) < 0.01), None)
+
+        self.tick(direction, web=True)
+        current = beam_of(self.me.web_anchor_x, self.me.web_anchor_height + 34)
+        assert self.me.web_time > 0 and current is not None, f'조각상에 줄이 닿지 않았습니다 {self}'
+        top = max(i for i, b in enumerate(beams) if b.floor == self.me.floor and b.rope)
+        for _ in range(round(10 / STEP)):
+            me = self.me
+            assert self.w.recording is not None and me.web_time > 0, f'거미 분신이 떨어졌습니다 {self}'
+            if not me.web_flying:
+                if current == top:
+                    return
+                if me.jump_height < beams[current].underside - 64 and me.web_length > 23:
+                    self.tick(stairs=1)   # 줄을 감아 올라간다
+                else:
+                    self.tick(direction, jump=True)
+                continue
+            hit = self.w.spider_web_target(me, direction)
+            index = beam_of(*hit) if hit else None
+            if index is not None and index > current:
+                self.tick(direction, web=True)
+                current = index
+            else:
+                self.tick(direction)
+        raise AssertionError(f'맨 위 조각상에 오르지 못했습니다 {self}')
+
+    def rope_up(self, beam, direction):
+        """본체: beam번 조각상에서 늘어진 거미 밧줄로 가서 ↑로 끝까지 오른 뒤 direction 쪽으로 뛰어내린다."""
+        self.until(lambda w: any(rope[5] == beam for rope in w.ropes), limit=8)
+        rope = next(rope for rope in self.w.ropes if rope[5] == beam)
+        self.go(rope[1])
+        for _ in range(round(6 / STEP)):
+            if self.me.rope is not None and self.me.base >= rope[3]:
+                break
+            self.tick(stairs=1)
+        else:
+            raise AssertionError(f'밧줄 끝까지 오르지 못했습니다 {self}')
+        self.jump(direction)
+        assert self.w.result == 'playing', f'밧줄에서 뛰어내리다 떨어졌습니다 {self}'
 
     def rec(self):  # C 키
         self.w.toggle_recording()
@@ -131,15 +187,19 @@ class Bot:
     def lever(self):  # E 키
         self.w.toggle_lever()
 
-    def kill(self, kind):
-        """찌르기 거리에서 싸운다. 적이 공격을 준비하면 뒤로 빠졌다가 다시 찌른다."""
+    def kill(self, kind, within=None):
+        """찌르기 거리에서 싸운다. 적이 공격을 준비하면 뒤로 빠졌다가 다시 찌른다. within=(왼쪽, 오른쪽)이면 그 안에서 나온 적만."""
         for _ in range(round((60 if kind == 'echo_knight' else 40) / STEP)):
-            targets = [e for e in self.w.enemies if e.spawn.kind == kind and e.actor.floor == self.me.floor]
+            targets = [e for e in self.w.enemies if e.spawn.kind == kind and e.actor.floor == self.me.floor
+                       and (within is None or within[0] <= e.spawn.point.x <= within[1])]
             if not targets or self.w.result != 'playing':
                 return
             foe = min(targets, key=lambda e: abs(e.actor.x - self.me.x))
             gap = foe.actor.x - self.me.x
             toward = 1 if gap >= 0 else -1
+            if kind in BOSS_KINDS and 0 < foe.windup <= 0.06 and abs(gap) < 110 and self.me.dash_cooldown == 0:
+                self.tick(-toward, dash=True)   # 물러날 곳이 막혔으면 내려치는 순간 대시의 무적으로 피한다
+                continue
             if self.dodge(foe):
                 continue
             flying = getattr(foe, 'broom', None) is not None and foe.actor.base > 40
@@ -188,18 +248,30 @@ class Bot:
             if not grounded and not me.air_jumped and me.jump_time >= 0.28:
                 self.tick(jump=True)
                 return True
+        if (skill and skill.name == 'hands' and foe.skill_time < skill.telegraph
+                and abs(me.x - foe.mark_x) < 110):
+            # 그림자 손아귀: 발밑에 번진 어둠 밖으로 걸어 나간다.
+            self.tick(1 if me.x >= foe.mark_x else -1)
+            return True
         for effect in self.w.boss_effects:
-            if effect.homing:
-                # 추적 불빛은 닿기 직전 그쪽으로 대시해 무적 시간으로 뚫고 지나간다.
+            if effect.homing or effect.wave:
+                # 추적 불빛·해골 불꽃·도깨비불은 닿기 직전 그쪽으로 대시해 무적 시간으로 뚫고 지나간다.
                 gap = effect.x - me.x
-                if abs(gap) < 60 and abs(effect.lift - me.jump_height - boss_skills.BODY) < 60 and me.dash_cooldown == 0:
+                if (abs(gap) < 70 and abs(effect.lift + effect.hit_up - me.jump_height - boss_skills.BODY) < 60
+                        and me.dash_cooldown == 0):
                     self.tick(1 if gap > 0 else -1, dash=True)
                     return True
                 continue
             if effect.hit_at is None or effect.floor != me.floor or effect.age > effect.hit_at + effect.hit_for:
                 continue
             distance = effect.x - me.x
-            if effect.jumpable:
+            if effect.jumpable and not effect.speed:
+                # 바닥에서 솟는 그림자 손은 솟기 직전에 뛰고, 정점에서 2단 점프로 손이 가라앉을 때까지 버틴다.
+                if abs(distance) < effect.radius + 12 and effect.age >= effect.hit_at - 0.2:
+                    if me.jump_time == 0 or (not me.air_jumped and me.jump_time >= 0.28):
+                        self.tick(jump=True)
+                        return True
+            elif effect.jumpable:
                 # 다가오는 구체는 닿기 직전에 뛰어넘는다.
                 if me.jump_time == 0 and abs(distance) < 70:
                     self.tick(jump=True)
@@ -269,111 +341,49 @@ def stage_1(b):
     b.jump(-1)
     b.go(350)
     b.up()
-    # 3층: 외눈 유령을 잡아 레벨업으로 체력을 채우고, 그 분신의 레이더로 발판을 드러낸다.
-    b.kill('watcher')
-    b.go(530)
-
-    def climb(recording):
-        # 녹화 중인 분신은 칼을 못 쓰니 그냥 걷고, 따라가는 본체는 다가오는 유령을 베며 간다.
-        walk = b.go if recording else b.cross
-        fight = (lambda: None) if recording else b.ghosts
-        for x, direction in ((None, 1), (690, 1), (770, -1), (738, 1)):   # 1단 → 2단 → 3단 → 4단
-            if x is not None:
-                walk(x)
-            b.jump(direction)
-            fight()
-        walk(1095)
-        if not recording:   # 떨어질 2단 자리에 유령이 없을 때 내려간다
-            b.until(lambda w: not any(e.spawn.kind == 'tier_ghost' and e.actor.base == 36
-                                      and 1100 < e.actor.x < 1360 for e in w.enemies), 8)
-        walk(1230)          # 4단 → 2단
-        fight()
-        for x in (1272, 1415):   # 3단 → 4단
-            walk(x)
-            b.jump(1)
-            fight()
-        walk(1700)          # 4단 → 1단
-        fight()
-        b.jump(1)           # 오른쪽 단
-        fight()
-
-    b.w.start_recording('watcher')   # C → 외눈 유령 분신
-    b.tick(web=True)                 # F: 레이더를 켠다
-    climb(recording=True)
+    # 3층: 거미 분신이 조각상에 줄을 쏘고 뛰기를 되풀이해 낭떠러지를 건너고,
+    # 본체는 그 아래 쳐지는 거미줄(3초 뒤 끊어진다)을 따라 건넌다.
+    b.go(540)
+    b.w.start_recording('crawler')   # C → 거미 분신
+    b.swing_across(1)
     b.rec()
-    b.ghosts()
-    climb(recording=False)
+    b.follow(1800)
     b.go(2100)
 
 
 @solution(2)
 def stage_2(b):
-    """뿔짐승의 도약: 뿔짐승 분신이 슈퍼 점프로 발판을 올라 스위치를 누르고, 본체는 열린 문으로 나간다."""
-    b.w.monster_echoes = ['watcher']   # 1스테이지에서 얻어 온 외눈 유령 분신
+    """거미 둥지: 사냥터 → 거미줄 협곡과 A 문 → 밧줄 탑 → 꼭대기 출구. 모든 길을 거미 분신으로 연다."""
     b.w.xp = 45                        # 1스테이지를 지나며 쌓인 경험치 (레벨 2)
     b.w.health = b.w.max_health
-    b.kill('beast')                    # 뿔짐승 분신을 얻는다
-
-    def climb(steps):
-        """steps: (발판 위에서 걸어갈 x, 다음 발판으로 뛰어 내릴 x)."""
-        for walk_x, land_x in steps:
-            b.go(walk_x)
-            b.super_jump(land_x)
-            assert b.me.base > 0, f'발판에 착지하지 못했습니다 {b} 높이 {b.me.base}'
-
-    def leap(aim, height, reach=135):
-        """움직이는 발판으로: aim(시계) 자리가 모으기 1초 + 착지 0.66초 뒤에 닿을 거리로 올 때
-        모으기 시작하고, 날아가며 aim을 따라간다. 서 있는 발판도 움직이므로 실려 갈 거리를 더한다."""
-        w = b.w
-        here = next((p for p in w.stage.platforms if p.floor == b.me.floor and p.height == b.me.base), None)
-        for _ in range(round(6 / STEP)):
-            now = w.platform_clock()
-            start = b.me.x + (here.shift(now + 1) - here.shift(now) if here else 0)
-            if abs(aim(now + 1.66) - start) <= reach:
-                break
+    b.kill('crawler', within=(150, 560))
+    assert b.w.hunt_open(b.w.stage.hunt_gates[0]), f'사냥 문이 열리지 않았습니다 {b}'
+    # [거미줄 협곡] 거미 분신이 조각상 셋을 타고 건너, A 문을 타고 넘어(↑) A 발판에서 녹화가 끝날 때까지 버틴다.
+    b.go(680)
+    b.w.start_recording('crawler')
+    b.swing_across(1)
+    door, plate = b.w.stage.gates[0].door, b.w.stage.gates[0].plate
+    if b.me.x < door.x:
+        b.go(door.x - 30)
+        b.tick(stairs=1)
+        while b.me.door_climb_time > 0:
             b.tick()
-        else:
-            raise AssertionError(f'뛸 때를 찾지 못했습니다 {b}')
-        b.tick(jump=True, held=True)
-        while b.me.beast_charge_active and w.result == 'playing':
-            b.tick(held=True)
-        while w.result == 'playing' and (b.me.jump_time > 0 or b.me.fall_speed):
-            gap = aim(w.platform_clock()) - b.me.x
-            b.tick(0 if abs(gap) < 3 else 1 if gap > 0 else -1)
-        assert b.me.base == height, f'움직이는 발판에 착지하지 못했습니다 {b} 높이 {b.me.base}'
-
-    def middle(index):
-        return lambda clock: sum(b.w.platform_span(index, clock)) / 2
-
-    # [1·2층 통합방] 좁은 발판을 오른쪽·왼쪽으로 번갈아 올라 오른쪽 위 스위치를 누른다.
-    # 발판 끝에서 뛰고 제때 멈춰야 한다. 마지막 턱은 끝까지 날아가야 닿는다.
-    b.go(520)
-    b.w.start_recording('beast')
-    climb(((540, 660), (677, 805), (793, 718), (703, 573), (587, 718), (731, 878), (893, 1060)))
-    b.go(1820)
-    assert b.w.switched[0], f'스위치가 눌리지 않았습니다 {b}'
+    b.go(plate.x)
+    b.until(lambda w: w.recording is None, limit=12)
+    # 본체는 거미줄을 따라 건너고, 분신이 발판을 밟아 A 문이 열리면 지나간다.
+    b.follow(1330)
+    b.until(lambda w: w.doors[0].open, limit=8)
+    b.go(1700)
+    b.kill('crawler', within=(1700, 2192))
+    # [밧줄 탑] 거미 분신이 조각상 셋을 줄을 감아 오르며 잡고, 본체는 재현 때 늘어진 밧줄로 턱 셋을 오른다.
+    b.go(2130)
+    b.w.start_recording('crawler')
+    b.web_climb(-1)
+    b.wait(0.5)                        # 맨 위 조각상에 잠깐 매달려 있다가 녹화를 끝낸다
     b.rec()
-    b.go(1900)                         # 열린 문을 지나 승강기
-    b.up()
-
-    # [3·4층 통합방] 외눈 유령 분신의 레이더를 렌즈에 비춰 숨은 발판을 모두 드러낸다.
-    b.w.start_recording('watcher')
-    b.tick(web=True)
-    b.wait(0.2)
-    assert b.w.lens_lit and len(b.w.revealed) == 7, f'렌즈가 켜지지 않았습니다 {b}'
-    b.rec()
-    # 25초 안에 뿔짐승 분신이 좌우로 움직이는 숨은 발판을 올라 왼쪽 위 스위치를 누른다. 떨어지면 구덩이다.
-    b.w.start_recording('beast')
-    b.go(1830)
-    for index in range(7, 13):
-        leap(middle(index), b.w.stage.platforms[index].height)
-    leap(lambda clock: 595, 630)
-    b.go(300)
-    assert b.w.switched[1], f'출구 스위치가 눌리지 않았습니다 {b}'
-    b.rec()
-    # 재현 분신도 녹화 때와 같은 때에 움직이는 발판을 만나 똑같이 오른다.
-    b.until(lambda w: w.echo is not None and w.echo.actor.base >= 270, limit=8)
-    b.go(2100, slash=False)              # 스위치가 연 민트색 포탈
+    for beam in (3, 4, 5):             # 밧줄 → 턱(185) → 밧줄 → 턱(420) → 밧줄 → 턱(655)
+        b.rope_up(beam, -1)
+    b.go(1110)
 
 
 @solution(3)
@@ -436,15 +446,27 @@ def stage_4(b):
     b.kill('magic_book')
     b.kill('potion_slime')
     b.kill('magic_armor')
-    climb(10, 115)
-    assert b.w.sky_progress == 1, f'1번 스위치가 켜지지 않았습니다 {b}'
-    climb(22, 115)
-    assert b.w.sky_progress == 2, f'2번 스위치가 켜지지 않았습니다 {b}'
+    climb(3, 115)
+    b.portal_room(0)
+    climb(7, 115)
+    b.portal_room(1)
     descend(1)
-    climb(16, 2125)
-    assert b.w.sky_progress == 3, f'3번 스위치가 켜지지 않았습니다 {b}'
+    climb(5, 2125)
+    b.portal_room(2)
     descend(-1)
     b.go(1240)
+
+
+def portal_room(b):
+    """하늘 포털 너머 방: 몬스터를 모두 처치하면 가운데에 포털이 열리고, 다가가면 빨려 들어간다."""
+    for kind in ('magic_armor', 'potion_slime', 'magic_book'):
+        b.kill(kind)
+    assert not b.w.enemies and b.w.portal_opened_at is not None, f'몬스터를 다 잡았는데 포털이 열리지 않았습니다 {b}'
+    b.go(b.w.stage.exit.x)
+
+
+for _room in SKY_ROOMS:
+    SOLUTIONS[_room + 1] = portal_room
 
 
 @solution(10)
@@ -528,6 +550,7 @@ def stage_10(b):
     b.go(1720)
     b.until(lambda w: w.sky_grab(*w.sky_blocks[1]), limit=8)
     b.w.sky_drag(1900, 290)
+    b.wait(0.5)   # 잡은 땅이 날아와 자리를 잡을 때까지
     b.w.sky_release()
     b.rec()
     _, x, height = b.w.portal_point(1 - b.w.portal_next)
@@ -565,6 +588,51 @@ def stage_6(b):
     # 대마녀의 방: 층 없는 보스방에서 대마녀를 처치하고 출구로.
     b.kill('grand_witch')
     b.go(2100)
+
+
+@solution(11)
+def stage_11(b):
+    """사슬 뱀의 탑. 1층: 뱀 꼬리에 올라 머리 바로 뒤를 따라 걸으면 세로 몸을 타고 2층으로 오른다.
+    2층: 뱀 B를 따라가다 B가 솟은 윗길(200)에서 바로 위를 지나는 뱀 C(240)로 뛰어 갈아타고 C를 따라 3층으로.
+    3층: 시작 바닥 끝(375)에 서 있으면 도는 뱀이 태워 올린다. 윗길 오른쪽 끝(1430 넘음)에서 출구 쪽으로 뛰어내린다."""
+    import chain_snake
+    tower = b.w.stage.tower
+
+    def head(index):
+        return chain_snake.point(tower.snakes[index], b.w.snake_state[index][0])
+
+    def toward(x, margin=3):
+        return 1 if x > b.me.x + margin else (-1 if x < b.me.x - margin else 0)
+
+    for _ in range(round(150 / STEP)):
+        w, me = b.w, b.me
+        if w.result != 'playing':
+            return
+        grounded = me.jump_time == 0 and not me.fall_speed
+        under = w._snake_under(me)
+        if me.floor == 0:
+            b.tick(toward(head(0)[0] - 20))
+        elif me.floor == 1:
+            if under and under[0] == 2 or me.base >= 230:
+                b.tick(toward(head(2)[0] + 20))
+            elif grounded and me.base == 200 and w.snake_state[1][1]:
+                above = [s for s in chain_snake.surfaces(tower.snakes[2], w.snake_state[2][0])
+                         if s[1] <= me.x <= s[2] and s[3] == 240]
+                b.tick(toward(head(1)[0] + 20), jump=bool(above))
+            else:
+                b.tick(toward(head(1)[0] + 20) if w.snake_state[1][1] else -1)
+        elif me.base == 0 and me.x < 400 and grounded and under is None:
+            b.tick(toward(375, 1))
+        elif under is not None and me.base >= 300 and me.x > 1430 and grounded:
+            b.tick(1, jump=True)
+        elif not grounded:
+            b.tick(1 if me.x < 2100 else 0)
+        elif me.base == 0 and me.x >= 1650:
+            b.tick(toward(2100))
+        else:
+            hx, _, dx, _ = head(3)
+            b.tick(toward(hx - 20 * dx) if me.base >= 300 else 0)
+    raise AssertionError(f'사슬 뱀의 탑을 오르지 못했습니다 {b}')
 
 
 @solution(7)
@@ -707,9 +775,9 @@ def check_balance():
     late = World(8)                                     # 후반 강화 ×1.6
     thief = next(e for e in late.enemies if e.spawn.kind == 'time_thief')
     assert (thief.health, late.enemy_damage(thief)) == (32, 11)
-    early = World(1)
-    beast = next(e for e in early.enemies if e.spawn.kind == 'beast')
-    assert early.enemy_damage(beast) == 10               # 25의 40%
+    early = World(4)
+    guard = next(e for e in early.enemies if e.spawn.kind == 'magic_armor_guard')
+    assert early.enemy_damage(guard) == 10               # 25의 40%
     late.hurt(99, '테스트')
     assert (late.health, late.result) == (0, 'defeated')
 
@@ -751,6 +819,20 @@ def check_late_stage_monsters():
 
 def check_puzzles():
     """기획서 그림대로 바꾼 장치가 분신 없이는 통과되지 않는지 확인한다."""
+    # 보스방 출구 포털: 보스를 처치하면 열리고, 가만히 서 있어도 가까우면 빨려 들어가 클리어, 멀면 그대로다.
+    for distance, cleared in ((200, True), (320, False)):
+        w = World(2)
+        boss = next(e for e in w.enemies if e.spawn.kind in BOSS_KINDS)
+        boss.health = 1
+        w.player.x, w.player.facing = boss.actor.x - 40, 1
+        w._attack()
+        w._apply_attack()
+        w.enemies = []
+        w.player.x = w.stage.exit.x - distance
+        for _ in range(round(4 / STEP)):
+            w.step(Motion())
+        assert w.portal_opened_at is not None and (w.result == 'cleared') == cleared, ('포털', distance, w.result, w.player.x)
+
     # 대시·2단 점프: 1스테이지와 2스테이지 점프맵에서는 못 쓰고, 간수의 방부터 쓴다.
     for index in (0, 1):
         w = World(index)
@@ -782,16 +864,16 @@ def check_puzzles():
         w.step(Motion(1, jump=frame in (0, 18), dash=frame in (4, 10, 22)))
         dashes += w.player.dash_time > before
     assert dashes == 2, ('공중 대시는 1단·2단 점프에 한 번씩입니다', dashes)
-    # 간수의 방 발판: 보통 점프로는 못 오르고 2단 점프로 80→160, 가운데 130은 점프 + 위 대시로 오른다.
+    # 간수의 방 발판: 점프로는 못 오르고 2단 점프로 120→240, 가운데 220은 2단 점프로는 못 닿고 점프 + 위 대시로 오른다.
     def climb(x, base, jumps, dash_at=None):
         w = World(2)
         w.enemies = []
         w.player.x, w.player.base = x, base
-        for frame in range(90):
+        for frame in range(150):
             w.step(Motion(jump=frame in jumps, dash=frame == dash_at, dash_up=frame == dash_at))
         return w.player.base
-    assert (climb(330, 0, (0,)), climb(330, 0, (0, 18)), climb(410, 80, (0, 18))) == (0, 80, 160), '간수의 방 양옆 발판'
-    assert (climb(970, 0, (0, 18)), climb(970, 0, (0,), dash_at=10)) == (0, 130), '간수의 방 가운데 발판'
+    assert (climb(330, 0, (0,)), climb(330, 0, (0, 24)), climb(410, 120, (0, 24))) == (0, 120, 240), '간수의 방 양옆 발판'
+    assert (climb(970, 0, (0, 24)), climb(970, 0, (0,), dash_at=24)) == (0, 220), '간수의 방 가운데 발판'
     # 위 대시는 약 145 솟구쳤다가 떨어지고, 대각선 위 대시는 옆·위로 약 100씩 간다.
     # 솟구치는 동안 Space는 1단 점프가 아니라 2단 점프로 친다 (공중 점프를 공짜로 얻지 못한다).
     for horizontal, up, side in ((0, 140, (-5, 5)), (1, 95, (90, 115))):
@@ -833,35 +915,62 @@ def check_puzzles():
     w.start_recording('magic_book')
     assert not w.sky_grab(*w.sky_blocks[0]), '염력이 통하지 않아야 할 땅을 잡았습니다'
 
-    # 점프맵: 보통 점프로는 첫 발판(높이 90)에 오르지 못하고, 스위치 없이는 잠긴 문을 못 지난다.
+    # 거미 둥지: 사냥터 거미가 남아 있으면 사냥 문이 닫혀 있고, 거미줄 없이 낭떠러지를 건너면 떨어진다.
     w = World(1)
-    w.enemies = []
-    w.player.x = 660                  # 첫 발판 바로 아래
-    for frame in range(60):
-        w.step(Motion(jump=frame == 0))
-    assert w.player.base == 0, '보통 점프로 점프맵 발판에 올랐습니다'
-    for _ in range(round(8 / STEP)):
+    for _ in range(round(6 / STEP)):
+        w.health = w.max_health
         w.step(Motion(1))
-    assert w.player.x < w.stage.switches[0].door.x, '스위치 없이 잠긴 문을 지났습니다'
-
-    # 3·4층 통합방: 바닥이 뚫려 있어 떨어지면 죽고, 렌즈 없이는 발판이 보이지 않는다.
+    assert w.player.x < w.stage.hunt_gates[0].door.x, '몬스터가 남았는데 사냥 문을 지났습니다'
+    w.enemies = []
+    for _ in range(round(6 / STEP)):
+        w.step(Motion(1))
+    assert w.result == 'defeated', ('거미줄 없이 낭떠러지를 건넜습니다', w.player)
+    # 건너편 A 문은 발판을 밟고 있는 동안만 열린다 (본체는 문 앞에서 발판에 갈 수 없다).
     w = World(1)
     w.enemies = []
-    w.warp_to_floor(1)
+    w.player.x = 1350
     for _ in range(round(3 / STEP)):
-        w.step(Motion(-1))
-    assert w.result == 'defeated' and not w.revealed, ('3·4층 구덩이에 떨어지지 않았습니다', w.player)
-    # 3·4층 출구는 왼쪽 위 스위치가 포탈을 열기 전엔 비어 있어 들어가지 못한다.
+        w.step(Motion(1, jump=True))
+    assert w.player.x < w.stage.gates[0].door.x, ('발판 없이 A 문을 지났습니다', w.player)
+    # 걸어가는 거미 분신은 낭떠러지에 떨어져 건너편까지 거미줄을 치지 못하고, 밧줄도 만들지 못한다.
     w = World(1)
     w.enemies = []
-    w.player.floor, w.player.x = w.stage.exit.floor, w.stage.exit.x
+    w.echo = Echo(Actor(680, 0), (Motion(1),) * 120, monster_kind='crawler')
+    for _ in range(120):
+        w.step(Motion())
+    assert w.echo is None and not any(w.bridge_tiles[0][5:]) and not w.ropes, '걸어서 거미줄을 끝까지 쳤습니다'
+    # 거미 밧줄: 재현 거미가 밧줄 조각상에 줄을 붙이면 밧줄이 생기고, 본체는 ↑로 끝까지 오른다.
+    # 6초 뒤 밧줄이 끊어지면 매달린 본체는 떨어진다.
+    w = World(1)
+    w.enemies = []
+    w.echo = Echo(Actor(2130, 0, -1), (Motion(-1, web=True, aim_x=-1),) + (Motion(),) * 600, monster_kind='crawler')
     w.step(Motion())
-    assert w.result == 'playing' and not w.portal_open, '스위치 없이 포탈로 나갔습니다'
-    w.switched[1] = True
+    assert len(w.ropes) == 1 and w.ropes[0][2:4] == [0.0, 155], w.ropes
+    w.player.x = w.ropes[0][1]
+    for _ in range(round(1.5 / STEP)):
+        w.step(Motion(stairs=1))
+    assert w.player.rope is not None and w.player.base == 155, ('밧줄을 오르지 못했습니다', w.player)
+    for _ in range(round(5.5 / STEP)):
+        w.step(Motion())
+    assert w.player.rope is None and w.player.base == 0 and not w.ropes, ('끊어진 밧줄에 매달려 있습니다', w.player)
+    # 출구는 꼭대기 턱 높이에서만 나간다.
+    w = World(1)
+    w.enemies = []
+    w.player.x = w.stage.exit.x
     w.step(Motion())
-    assert w.result == 'cleared', '스위치가 연 포탈로 나가지 못했습니다'
+    assert w.result == 'playing', '바닥에서 꼭대기 출구로 나갔습니다'
+    w.player.base = w.stage.exit_height
+    w.step(Motion())
+    assert w.result == 'cleared', ('꼭대기 출구로 나가지 못했습니다', w.result)
+    # 거미 알: 닿으면 경험치를 얻고 한 번만 먹는다.
+    w = World(1)
+    w.enemies = []
+    x, height, xp = w.stage.eggs[0]
+    w.player.x, w.player.base = x, height
+    w.step(Motion())
+    assert w.xp == xp and not w.eggs, (w.xp, w.eggs)
 
-    # 하늘 땅: 빠진 단이 있어 디딤돌만으로는 스위치 턱에 못 오르고, 출구는 1→2→3을 다 밟기 전엔 잠겨 있다.
+    # 하늘 땅: 빠진 단이 있어 디딤돌만으로는 포털 턱에 못 오르고, 출구는 열쇠 3개를 모으기 전엔 잠겨 있다.
     w = World(3)
     sky = w.stage.sky
     w.enemies = []
@@ -873,20 +982,31 @@ def check_puzzles():
             w.step(Motion(1 if x > w.player.x else -1, jump=True))
             for _ in range(60):
                 w.step(Motion(1 if x > w.player.x + 3 else -1 if x < w.player.x - 3 else 0))
-        assert w.player.base <= 38 and w.sky_progress == 0, ('빠진 단을 뛰어 올랐습니다', w.player)
+        assert w.player.base <= SKY_STEP and w.room_request is None, ('빠진 단을 뛰어 올랐습니다', w.player)
     w.player.x, w.player.base = w.stage.exit.x, 0
     for _ in range(10):
         w.step(Motion())
-    assert w.result == 'playing', '스위치 없이 출구로 나갔습니다'
+    assert w.result == 'playing', '열쇠 없이 출구로 나갔습니다'
     # 염력은 녹화 중인 마법책 분신 둘레에만 닿고, 다른 분신이나 본체로는 땅을 못 잡는다.
     assert not w.sky_grab(*sky.blocks[0]), '마법책 분신 없이 하늘 땅을 잡았습니다'
     w.player.x = 100
     w.start_recording('magic_book')
-    assert not w.sky_grab(*sky.blocks[3]), '멀리 있는 하늘 땅을 잡았습니다'
+    # 멀리 있는 땅도 잡히고, 순간이동하지 않고 SKY_FLY 빠르기로 분신 둘레 reach 안까지 날아온다.
+    far = list(w.sky_blocks[3])
+    assert w.sky_grab(*far), '멀리 있는 하늘 땅을 잡지 못했습니다'
+    w.step(Motion())
+    assert 0 < hypot(w.sky_blocks[3][0] - far[0], w.sky_blocks[3][1] - far[1]) <= SKY_FLY * STEP + 1, '잡은 땅이 날아오지 않았습니다'
+    for _ in range(round(3 / STEP)):
+        w.step(Motion())
+    assert hypot(w.sky_blocks[3][0] - 100, w.sky_blocks[3][1] - 30) <= sky.reach + 1, ('잡은 땅이 분신 곁에 오지 않았습니다', w.sky_blocks[3])
+    w.sky_release()
+    w.sky_pin[3] = 0.0
     # 섬은 떠다니고, 위에 선 본체를 실어 나른다. 분신이 잡아 놓은 섬은 SKY_PIN초 멈췄다가 다시 떠다닌다.
     w.sky_blocks[0] = [100, SKY_STEP]
     assert w.sky_grab(100, SKY_STEP), '가까운 하늘 땅을 잡지 못했습니다'
     w.sky_drag(160, SKY_STEP)
+    for _ in range(10):   # 60px를 날아온다
+        w.step(Motion())
     w.sky_release()
     for _ in range(round((SKY_PIN - 0.2) / STEP)):
         w.step(Motion())
@@ -904,11 +1024,20 @@ def check_puzzles():
     w.toggle_recording()
     assert w.echo and w.echo.actor.base == SKY_STEP, ('재현 분신이 섬 높이에서 출발하지 않았습니다', w.echo)
     w.echo = None
-    # 순서가 틀리면 스위치와 옮긴 땅이 모두 처음으로 돌아간다.
-    w.sky_progress, w.sky_blocks[0] = 1, [300, 40]
+    # 포털은 순서 없이 들어가고, 열쇠를 얻은 포털은 다시 들어가지 않는다. 방에서는 몬스터를 다 잡기 전엔 못 나간다.
     w.player.x, w.player.base = sky.switches[2][0], sky.switches[2][1]
     w.step(Motion())
-    assert w.sky_progress == 0 and w.sky_blocks[0] == list(sky.blocks[0]), '틀린 순서에 초기화되지 않았습니다'
+    assert w.room_request == 13, ('3번 포털이 방으로 보내지 않았습니다', w.room_request)
+    room = w.enter_room()
+    room.player.x = room.stage.exit.x
+    for _ in range(10):
+        room.step(Motion())
+    assert room.result == 'playing', '몬스터를 남긴 채 방을 나갔습니다'
+    room.result = 'cleared'
+    assert room.back_from_room() is w and w.sky_keys == {2}, '열쇠를 들고 돌아오지 않았습니다'
+    w.sky_on = None
+    w.step(Motion())
+    assert w.room_request is None, '열쇠를 얻은 포털에 다시 들어갔습니다'
 
     # 동시 발판: 본체 발판만 밟아서는 열리지 않는다.
     w = World(6)
@@ -931,45 +1060,31 @@ def check_puzzles():
     assert guard.target is w.echo.actor, '도발 발판의 분신을 노리지 않습니다'
 
 
-def check_hidden_platforms():
-    """1스테이지 3층: 숨은 발판은 외눈 유령 분신의 레이더로 드러난 동안만 밟힌다."""
-    def ledge():
+def check_web_bridge():
+    """1스테이지 3층 거미줄 다리: 거미줄이 없으면 떨어지고, 거미줄은 3초 뒤 끊어져 그 위에 선 본체도 떨어진다."""
+    def edge():
         w = World(0)
         w.enemies = []
-        w.player.floor, w.player.x = 2, 530
+        w.player.floor, w.player.x = 2, 540
         return w
 
-    # 드러나지 않은 발판으로 뛰면 구덩이로 떨어져 죽는다.
-    w = ledge()
-    for frame in range(round(3 / STEP)):
-        w.step(Motion(1, jump=frame == 0))
-    assert w.result == 'defeated', ('숨은 발판을 밟았습니다', w.player)
-
-    # 레이더(F)를 켠 분신이 있는 동안은 타이머가 멈춰 있고, 분신이 사라진 뒤 10초가 지나면 다시 숨는다.
-    w = ledge()
-    w.echo = Echo(Actor(530, 2), (Motion(web=True),) + (Motion(),) * 59, monster_kind='watcher')
-    for _ in range(round(2 / STEP)):
-        w.step(Motion(int(w.player.x < 650), jump=w.player.x < 535))
-    assert w.echo is None and 0 in w.revealed and w.player.base == 0 and w.player.x > 600, '레이더로 1단 발판이 드러나지 않았습니다'
-    assert 8.9 < w.reveal_time < 9.1, w.reveal_time   # 분신이 사라진 1초 전부터 센다
-    for _ in range(round(9.5 / STEP)):
+    w = edge()
+    for _ in range(round(3 / STEP)):
+        w.step(Motion(1))
+    assert w.result == 'defeated', ('거미줄 없이 낭떠러지를 걸었습니다', w.player)
+    w = edge()
+    w.bridge_tiles[0][:3] = [3.0] * 3   # 560~680에 거미줄
+    for _ in range(round(0.5 / STEP)):
+        w.step(Motion(int(w.player.x < 620)))
+    assert w.result == 'playing' and w.player.base == 0 and w.player.x > 600, ('거미줄 위에 서지 못했습니다', w.player)
+    for _ in range(round(3 / STEP)):
         w.step(Motion())
-    assert not w.revealed and w.result == 'defeated', '10초 뒤 발판이 사라지지 않았습니다'
-
-    # 층 유령: 같은 높이에서 세 번 닿으면 쓰러진다. 다른 단의 유령은 닿지 않는다.
-    w = World(0)
-    ghost = next(e for e in w.enemies if e.spawn.kind == 'tier_ghost' and e.spawn.height == 0)
-    assert w.enemy_damage(ghost) * 2 < w.max_health <= w.enemy_damage(ghost) * 3
-    high = next(e for e in w.enemies if e.spawn.kind == 'tier_ghost' and e.spawn.height == 108)
-    w.player.floor, w.player.x = 2, high.actor.x
-    w.enemies = [high]
-    w.step(Motion())
-    assert w.health == w.max_health, '다른 단의 유령에게 맞았습니다'
+    assert w.result == 'defeated', ('끊어진 거미줄 위에 서 있습니다', w.player)
 
 
 def main():
     check_balance()
-    check_hidden_platforms()
+    check_web_bridge()
     check_puzzles()
     print('OK   퍼즐 장치')
     check_boss_warp()
@@ -978,11 +1093,13 @@ def main():
     print('OK   밸런스 표')
     failed = False
     for index, stage in enumerate(STAGES):
+        if index in SKY_ROOMS:
+            continue   # 포털 너머 방은 하늘 땅 공략 안에서 레벨을 올려 가며 차례로 깬다
         number = index + 1
         bot = Bot(index)
         try:
             SOLUTIONS[number](bot)
-            bot.wait(0.2)
+            bot.wait(1.0)   # 보스방은 포털에 빨려 들어가는 데 0.8초 걸린다
             assert bot.w.result == 'cleared', f'출구에 닿지 못했습니다 {bot}'
             assert rush(index) != 'cleared', '분신 없이 달리기만 해도 깨집니다'
             print(f'OK   {stage.title}  ({bot.frames * STEP:.0f}초, 남은 체력 {bot.w.health})')

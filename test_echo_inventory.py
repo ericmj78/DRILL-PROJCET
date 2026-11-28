@@ -7,9 +7,9 @@ from world import World
 class EchoInventoryTests(unittest.TestCase):
     def test_two_monsters_and_duplicate_or_boss_are_ignored(self):
         w = World()
-        for kind in ('crawler', 'beast', 'crawler', 'jailer_boss'):
+        for kind in ('crawler', 'magic_book', 'crawler', 'jailer_boss', 'beast'):   # 뿔짐승은 분신이 되지 않는다
             w.offer_monster_echo(kind)
-        self.assertEqual(w.monster_echoes, ['crawler', 'beast'])
+        self.assertEqual(w.monster_echoes, ['crawler', 'magic_book'])
         self.assertIsNone(w.pending_monster_echo)
 
     def test_replace_or_discard_and_queue(self):
